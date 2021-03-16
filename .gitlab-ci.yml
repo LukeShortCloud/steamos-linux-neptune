@@ -39,13 +39,13 @@ kernel build:
 
      # notify
      - test -f "fail.txt" && exit 1
-     - echo "All tests passed..setup tags"
-     - git config --global user.email ${GIT_AUTHOR_EMAIL}
-     - git config --global user.name ${GIT_AUTHOR_NAME}
-     - sed -i -r 's/(url = .*):(.*)@(.*)/\1:'${LINUX_INTEGRATION_TOKEN}'@\3/' .git/config
-     - git tag ${TAG}
-     - git tag -f latest
-     - git push -o ci.skip origin -f --tags
+     - echo "All tests passed."
+     #- git config --global user.email ${GIT_AUTHOR_EMAIL}
+     #- git config --global user.name ${GIT_AUTHOR_NAME}
+     #- sed -i -r 's/(url = .*):(.*)@(.*)/\1:'${LINUX_INTEGRATION_TOKEN}'@\3/' .git/config
+     #- git tag ${TAG}
+     #- git tag -f latest
+     #- git push -o ci.skip origin -f --tags
   artifacts:
     expire_in: 1 week
     when: always
