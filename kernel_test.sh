@@ -45,7 +45,7 @@ echo "========================================================================"
 echo -e "\t\t\t\t Completed perf run" 
 }
 
-timeout 150m start_test 2>&1 | tee -a /mnt/kernel_results.log
+start_test 2>&1 | tee -a /mnt/kernel_results.log
 
 # Check Interception overhead
 MAX_OVERHEAD="10.00"
