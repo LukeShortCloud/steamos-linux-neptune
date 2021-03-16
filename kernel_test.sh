@@ -1,6 +1,7 @@
 #!/bin/bash
 
 start_test() {
+shutdown +90
 echo -e "\t\t\t\t Starting futex Tests" 
 cd /mnt/ && make -C tools/testing/selftests TARGETS=futex
 cd /mnt/tools/testing/selftests/futex/ && ./run.sh
