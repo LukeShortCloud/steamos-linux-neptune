@@ -16,7 +16,7 @@ stages:
 kernel build:
   stage: build
   tags:
-     - autoscaled 
+     - autoscaled-kernel 
   before_script:
     - apt-get update -y
     - apt-get install -y rsync git build-essential bc kmod cpio flex cpio libncurses5-dev bison libssl-dev libelf-dev openssh-client curl qemu-system*
