@@ -40,6 +40,8 @@ kernel build:
      # notify
      - test -f "fail.txt" && exit 1
      - echo "All tests passed."
+     # Save bzImage file under Package registry
+     - curl --header "JOB-TOKEN: $CI_JOB_TOKEN" --upload-file bzImage ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/bzImage/0.0.1/bzImage
      
   artifacts:
     expire_in: 1 week
