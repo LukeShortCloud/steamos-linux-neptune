@@ -1,0 +1,50 @@
+variables:
+  DOCKER_DRIVER: overlay2
+  KERNEL: 'bzImage'
+  ROOTFS_NAME: 'ubuntu-19.04-desktopV4-amd64.img.qcow2'
+  ROOTFS_IMAGE_URL: 'https://people.collabora.com/~laks/lava/kernel_test/ubuntu-19.04-desktopV4-amd64.img.qcow2.gz'
+  GIT_AUTHOR_NAME: "Gitlab-ci"
+  GIT_AUTHOR_EMAIL: "gitlab@gitlab.steamos.cloud"
+  TAG: CI_${CI_PIPELINE_ID}_${CI_COMMIT_SHORT_SHA}
+  
+before_script:
+   - apt-get update -y
+
+stages:
+  - build
+
+kernel build:
+  stage: build
+  tags:
+     - autoscaled 
+  before_script:
+    - apt-get update -y
+    - apt-get install -y rsync git build-essential bc kmod cpio flex cpio libncurses5-dev bison libssl-dev libelf-dev openssh-client curl qemu-system*
+  script:
+     - make x86_64_defconfig && make kvm_guest.config
+     - ./scripts/kconfig/merge_config.sh .config .config-fragment
+     - make -j`nproc`
+     - git rev-parse HEAD &> commit_id_file
+     - cp -v arch/x86/boot/bzImage .
+     - cp .config kernel_config
+     # download rootfs
+     - curl  ${ROOTFS_IMAGE_URL} -o "${ROOTFS_NAME}.gz"
+     - gunzip "${ROOTFS_NAME}.gz"
+     - echo "Running cmd $QEMU_CMD"
+     - qemu-system-x86_64 -enable-kvm -nographic -kernel ${KERNEL} -drive file=${ROOTFS_NAME},format=qcow2 -device virtio-serial-pci -virtfs local,path=$(pwd),mount_tag=steamlogs,security_model=none -m 2G -smp 2 -cpu host -net user,hostfwd=tcp::2222-:22 -net nic,model=virtio --append "root=/dev/sda1 rw console=ttyS0" &
+     - QEMU_PID=$!
+     - echo "QEMU pid is $QEMU_PID"
+     - sleep 90
+     - tail --pid=$QEMU_PID -f kernel_results.log
+
+     # notify
+     - test -f "fail.txt" && exit 1
+     - echo "All tests passed."
+     
+  artifacts:
+    expire_in: 1 week
+    when: always
+    paths:
+      - bzImage
+      - kernel_config
+      - kernel_results.log
