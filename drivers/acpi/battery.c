@@ -165,11 +165,11 @@ static int acpi_battery_is_charged(struct acpi_battery *battery)
 		return 0;
 
 	/* good batteries update full_charge as the batteries degrade */
-	if (battery->full_charge_capacity == battery->capacity_now)
+	if (battery->full_charge_capacity <= battery->capacity_now)
 		return 1;
 
 	/* fallback to using design values for broken batteries */
-	if (battery->design_capacity == battery->capacity_now)
+	if (battery->design_capacity <= battery->capacity_now)
 		return 1;
 
 	/* we don't do any sort of metric based on percentages */
