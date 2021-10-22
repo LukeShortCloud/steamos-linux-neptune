@@ -1,0 +1,34 @@
+als:
+    d7e19fd05f545d895810d2a53e0081e58a02cac6 ("add ltrf216a driver")
+amd-staging-drm-next:
+    275935eb730f214f0e57076636385ddda81c903f ("drm/amd/display: Add 120Hz support for freesync video mode")
+backlight-precision:
+    a18f6baa62a454a5c4a15d56022eb48f6611e120 ("drm/amd/display: change default backlight min value from 12 -> 1.")
+battery-quirk:
+    c9fc7f9aa423670f2d9c91328fe3e769952ec5c4 ("acpi: battery: Report overcharged battery as fully charged")
+cppc-governor:
+    15badf7ff2fd4b7ca637239e3d9d01bcdf201aec ("debug-patch-from-ray")
+futex2:
+    c9246bf8f31a873c578c82c82f4ba635e8d9916a ("futex2: Add sysfs entry for syscall numbers")
+futex-wait-multiple:
+    ec4cd0256fb4645db17ac3e25ec00b2b6e2c3d6b ("futex: Add Proton compatibility code")
+gfxoff:
+    da5799feaf864c733872f7d309133f3aa0d8840a ("drm/amdgpu/vcn: drop gfxoff control for VCN2+")
+mm-soft-dirty-file:
+    dade16308d7c66b639d77b0c3b93f711341d9f79 ("mm: Support soft dirty flag read with reset.")
+platform:
+    ddb45b037e232719332e52313303c31922274d93 ("platform: jupiter: Expose firmware version and board ID")
+rtw88:
+    d95995492c6715cb67e2d8ac67264299c94094e8 ("rtw88: add quirk to disable pci caps on HP Pavilion 14-ce0xxx")
+sclk-profiling-mode:
+    72a4f00cc35a8c195767eafc3a6783b00e91f303 ("drm/amdgpu/pm: properly handle sclk for profiling modes on vangogh")
+setup-gitlabci:
+    40e5486b4f92756df462e92afbc2c1bbc5439946 ("gitlab-ci: Enable CONFIG_JUPITER in ci build")
+simon:
+    bdae74413e60c572b03f144ee97c6d7209321495 ("amd/display: only require overlay plane to cover whole CRTC on ChromeOS")
+spi-config-timeout-quirk:
+    33ddc83245e13398673e0d3e8457a9e96850e341 ("pinctrl-amd: Add quirk to timeout irq pin reconfiguration")
+touchscreen-probe:
+    d219296b00fdcfb4f1e7fb365da6f57d6384b055 ("gpio: Return EPROBE_DEFER when gc->to_irq is NULL")
+TTM_PL_FLAG_TEMPORARY:
+    6d0650fe2686667b68e1670f29a928e935df568f ("drm/amdgpu: Fix BUG_ON assert")
