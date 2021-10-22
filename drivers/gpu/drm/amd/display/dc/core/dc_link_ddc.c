@@ -196,7 +196,8 @@ static void ddc_service_construct(
 	ddc_service->link = init_data->link;
 	ddc_service->ctx = init_data->ctx;
 
-	if (BP_RESULT_OK != dcb->funcs->get_i2c_info(dcb, init_data->id, &i2c_info)) {
+	if (init_data->is_dpia_link ||
+	    dcb->funcs->get_i2c_info(dcb, init_data->id, &i2c_info) != BP_RESULT_OK) {
 		ddc_service->ddc_pin = NULL;
 	} else {
 		DC_LOGGER_INIT(ddc_service->ctx->logger);
@@ -658,7 +659,12 @@ int dc_link_aux_transfer_raw(struct ddc_service *ddc,
 		struct aux_payload *payload,
 		enum aux_return_code_type *operation_result)
 {
-	return dce_aux_transfer_raw(ddc, payload, operation_result);
+	if (ddc->ctx->dc->debug.enable_dmub_aux_for_legacy_ddc ||
+	    !ddc->ddc_pin) {
+		return dce_aux_transfer_dmub_raw(ddc, payload, operation_result);
+	} else {
+		return dce_aux_transfer_raw(ddc, payload, operation_result);
+	}
 }
 
 /* dc_link_aux_transfer_with_retries() - Attempt to submit an
@@ -681,6 +687,10 @@ bool dc_link_aux_try_to_configure_timeout(struct ddc_service *ddc,
 {
 	bool result = false;
 	struct ddc *ddc_pin = ddc->ddc_pin;
+
+	/* Do not try to access nonexistent DDC pin. */
+	if (ddc->link->ep_type != DISPLAY_ENDPOINT_PHY)
+		return true;
 
 	if (ddc->ctx->dc->res_pool->engines[ddc_pin->pin_data->en]->funcs->configure_timeout) {
 		ddc->ctx->dc->res_pool->engines[ddc_pin->pin_data->en]->funcs->configure_timeout(ddc, timeout);

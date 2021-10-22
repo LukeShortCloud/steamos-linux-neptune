@@ -94,6 +94,15 @@ AMD_DAL_CLK_MGR_DCN20 = $(addprefix $(AMDDALPATH)/dc/clk_mgr/dcn20/,$(CLK_MGR_DC
 AMD_DISPLAY_FILES += $(AMD_DAL_CLK_MGR_DCN20)
 
 ###############################################################################
+# DCN201
+###############################################################################
+CLK_MGR_DCN201 = dcn201_clk_mgr.o
+
+AMD_DAL_CLK_MGR_DCN201 = $(addprefix $(AMDDALPATH)/dc/clk_mgr/dcn201/,$(CLK_MGR_DCN201))
+
+AMD_DISPLAY_FILES += $(AMD_DAL_CLK_MGR_DCN201)
+
+###############################################################################
 # DCN21
 ###############################################################################
 CLK_MGR_DCN21 = rn_clk_mgr.o rn_clk_mgr_vbios_smu.o
@@ -135,4 +144,13 @@ endif
 AMD_DAL_CLK_MGR_DCN301 = $(addprefix $(AMDDALPATH)/dc/clk_mgr/dcn301/,$(CLK_MGR_DCN301))
 
 AMD_DISPLAY_FILES += $(AMD_DAL_CLK_MGR_DCN301)
+
+###############################################################################
+# DCN31
+###############################################################################
+CLK_MGR_DCN31 = dcn31_smu.o dcn31_clk_mgr.o
+
+AMD_DAL_CLK_MGR_DCN31 = $(addprefix $(AMDDALPATH)/dc/clk_mgr/dcn31/,$(CLK_MGR_DCN31))
+
+AMD_DISPLAY_FILES += $(AMD_DAL_CLK_MGR_DCN31)
 endif

@@ -23,6 +23,7 @@
  */
 
 #include <drm/amdgpu_drm.h>
+#include <drm/drm_aperture.h>
 #include <drm/drm_drv.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_vblank.h>
@@ -42,7 +43,7 @@
 #include "amdgpu_irq.h"
 #include "amdgpu_dma_buf.h"
 #include "amdgpu_sched.h"
-
+#include "amdgpu_fdinfo.h"
 #include "amdgpu_amdkfd.h"
 
 #include "amdgpu_ras.h"
@@ -94,9 +95,12 @@
  * - 3.39.0 - DMABUF implicit sync does a full pipeline sync
  * - 3.40.0 - Add AMDGPU_IDS_FLAGS_TMZ
  * - 3.41.0 - Add video codec query
+ * - 3.42.0 - Add 16bpc fixed point display support
+ * - 3.43.0 - Add device hot plug/unplug support
+ * - 3.44.0 - DCN3 supports DCC independent block settings: !64B && 128B, 64B && 128B
  */
 #define KMS_DRIVER_MAJOR	3
-#define KMS_DRIVER_MINOR	41
+#define KMS_DRIVER_MINOR	44
 #define KMS_DRIVER_PATCHLEVEL	0
 
 int amdgpu_vram_limit;
@@ -158,6 +162,7 @@ int amdgpu_smu_pptable_id = -1;
  *     highest. That helps saving some idle power.
  * DISABLE_FRACTIONAL_PWM (bit 2) disabled by default
  * PSR (bit 3) disabled by default
+ * EDP NO POWER SEQUENCING (bit 4) disabled by default
  */
 uint amdgpu_dc_feature_mask = 2;
 uint amdgpu_dc_debug_mask;
@@ -171,6 +176,7 @@ int amdgpu_tmz = -1; /* auto */
 uint amdgpu_freesync_vid_mode;
 int amdgpu_reset_method = -1; /* auto */
 int amdgpu_num_kcq = -1;
+int amdgpu_smartshift_bias;
 
 static void amdgpu_drv_delayed_reset_work_handler(struct work_struct *work);
 
@@ -287,9 +293,9 @@ module_param_named(msi, amdgpu_msi, int, 0444);
  *   for SDMA and Video.
  *
  * By default(with no lockup_timeout settings), the timeout for all non-compute(GFX, SDMA and Video)
- * jobs is 10000. And there is no timeout enforced on compute jobs.
+ * jobs is 10000. The timeout for compute is 60000.
  */
-MODULE_PARM_DESC(lockup_timeout, "GPU lockup timeout in ms (default: for bare metal 10000 for non-compute jobs and infinity timeout for compute jobs; "
+MODULE_PARM_DESC(lockup_timeout, "GPU lockup timeout in ms (default: for bare metal 10000 for non-compute jobs and 60000 for compute jobs; "
 		"for passthrough or sriov, 10000 for all jobs."
 		" 0: keep default value. negative: infinity timeout), "
 		"format: for bare metal [Non-Compute] or [GFX,Compute,SDMA,Video]; "
@@ -623,7 +629,7 @@ module_param_named(mcbp, amdgpu_mcbp, int, 0444);
 /**
  * DOC: discovery (int)
  * Allow driver to discover hardware IP information from IP Discovery table at the top of VRAM.
- * (-1 = auto (default), 0 = disabled, 1 = enabled)
+ * (-1 = auto (default), 0 = disabled, 1 = enabled, 2 = use ip_discovery table from file)
  */
 MODULE_PARM_DESC(discovery,
 	"Allow driver to discover hardware IPs from IP Discovery table at the top of VRAM");
@@ -640,7 +646,8 @@ module_param_named(mes, amdgpu_mes, int, 0444);
 
 /**
  * DOC: noretry (int)
- * Disable retry faults in the GPU memory controller.
+ * Disable XNACK retry in the SQ by default on GFXv9 hardware. On ASICs that
+ * do not support per-process XNACK this also disables retry page faults.
  * (0 = retry enabled, 1 = retry disabled, -1 auto (default))
  */
 MODULE_PARM_DESC(noretry,
@@ -833,8 +840,23 @@ module_param_named(tmz, amdgpu_tmz, int, 0444);
 
 /**
  * DOC: freesync_video (uint)
- * Enabled the optimization to adjust front porch timing to achieve seamless mode change experience
- * when setting a freesync supported mode for which full modeset is not needed.
+ * Enable the optimization to adjust front porch timing to achieve seamless
+ * mode change experience when setting a freesync supported mode for which full
+ * modeset is not needed.
+ *
+ * The Display Core will add a set of modes derived from the base FreeSync
+ * video mode into the corresponding connector's mode list based on commonly
+ * used refresh rates and VRR range of the connected display, when users enable
+ * this feature. From the userspace perspective, they can see a seamless mode
+ * change experience when the change between different refresh rates under the
+ * same resolution. Additionally, userspace applications such as Video playback
+ * can read this modeset list and change the refresh rate based on the video
+ * frame rate. Finally, the userspace can also derive an appropriate mode for a
+ * particular refresh rate based on the FreeSync Mode and add it to the
+ * connector's mode list.
+ *
+ * Note: This is an experimental feature.
+ *
  * The default value: 0 (off).
  */
 MODULE_PARM_DESC(
@@ -850,11 +872,10 @@ MODULE_PARM_DESC(reset_method, "GPU reset method (-1 = auto (default), 0 = legac
 module_param_named(reset_method, amdgpu_reset_method, int, 0444);
 
 /**
- * DOC: bad_page_threshold (int)
- * Bad page threshold is to specify the threshold value of faulty pages
- * detected by RAS ECC, that may result in GPU entering bad status if total
- * faulty pages by ECC exceed threshold value and leave it for user's further
- * check.
+ * DOC: bad_page_threshold (int) Bad page threshold is specifies the
+ * threshold value of faulty pages detected by RAS ECC, which may
+ * result in the GPU entering bad status when the number of total
+ * faulty pages by ECC exceeds the threshold value.
  */
 MODULE_PARM_DESC(bad_page_threshold, "Bad page threshold(-1 = auto(default value), 0 = disable bad page retirement)");
 module_param_named(bad_page_threshold, amdgpu_bad_page_threshold, int, 0444);
@@ -870,6 +891,636 @@ module_param_named(num_kcq, amdgpu_num_kcq, int, 0444);
 MODULE_PARM_DESC(smu_pptable_id,
 	"specify pptable id to be used (-1 = auto(default) value, 0 = use pptable from vbios, > 0 = soft pptable id)");
 module_param_named(smu_pptable_id, amdgpu_smu_pptable_id, int, 0444);
+
+/* These devices are not supported by amdgpu.
+ * They are supported by the mach64, r128, radeon drivers
+ */
+static const u16 amdgpu_unsupported_pciidlist[] = {
+	/* mach64 */
+	0x4354,
+	0x4358,
+	0x4554,
+	0x4742,
+	0x4744,
+	0x4749,
+	0x474C,
+	0x474D,
+	0x474E,
+	0x474F,
+	0x4750,
+	0x4751,
+	0x4752,
+	0x4753,
+	0x4754,
+	0x4755,
+	0x4756,
+	0x4757,
+	0x4758,
+	0x4759,
+	0x475A,
+	0x4C42,
+	0x4C44,
+	0x4C47,
+	0x4C49,
+	0x4C4D,
+	0x4C4E,
+	0x4C50,
+	0x4C51,
+	0x4C52,
+	0x4C53,
+	0x5654,
+	0x5655,
+	0x5656,
+	/* r128 */
+	0x4c45,
+	0x4c46,
+	0x4d46,
+	0x4d4c,
+	0x5041,
+	0x5042,
+	0x5043,
+	0x5044,
+	0x5045,
+	0x5046,
+	0x5047,
+	0x5048,
+	0x5049,
+	0x504A,
+	0x504B,
+	0x504C,
+	0x504D,
+	0x504E,
+	0x504F,
+	0x5050,
+	0x5051,
+	0x5052,
+	0x5053,
+	0x5054,
+	0x5055,
+	0x5056,
+	0x5057,
+	0x5058,
+	0x5245,
+	0x5246,
+	0x5247,
+	0x524b,
+	0x524c,
+	0x534d,
+	0x5446,
+	0x544C,
+	0x5452,
+	/* radeon */
+	0x3150,
+	0x3151,
+	0x3152,
+	0x3154,
+	0x3155,
+	0x3E50,
+	0x3E54,
+	0x4136,
+	0x4137,
+	0x4144,
+	0x4145,
+	0x4146,
+	0x4147,
+	0x4148,
+	0x4149,
+	0x414A,
+	0x414B,
+	0x4150,
+	0x4151,
+	0x4152,
+	0x4153,
+	0x4154,
+	0x4155,
+	0x4156,
+	0x4237,
+	0x4242,
+	0x4336,
+	0x4337,
+	0x4437,
+	0x4966,
+	0x4967,
+	0x4A48,
+	0x4A49,
+	0x4A4A,
+	0x4A4B,
+	0x4A4C,
+	0x4A4D,
+	0x4A4E,
+	0x4A4F,
+	0x4A50,
+	0x4A54,
+	0x4B48,
+	0x4B49,
+	0x4B4A,
+	0x4B4B,
+	0x4B4C,
+	0x4C57,
+	0x4C58,
+	0x4C59,
+	0x4C5A,
+	0x4C64,
+	0x4C66,
+	0x4C67,
+	0x4E44,
+	0x4E45,
+	0x4E46,
+	0x4E47,
+	0x4E48,
+	0x4E49,
+	0x4E4A,
+	0x4E4B,
+	0x4E50,
+	0x4E51,
+	0x4E52,
+	0x4E53,
+	0x4E54,
+	0x4E56,
+	0x5144,
+	0x5145,
+	0x5146,
+	0x5147,
+	0x5148,
+	0x514C,
+	0x514D,
+	0x5157,
+	0x5158,
+	0x5159,
+	0x515A,
+	0x515E,
+	0x5460,
+	0x5462,
+	0x5464,
+	0x5548,
+	0x5549,
+	0x554A,
+	0x554B,
+	0x554C,
+	0x554D,
+	0x554E,
+	0x554F,
+	0x5550,
+	0x5551,
+	0x5552,
+	0x5554,
+	0x564A,
+	0x564B,
+	0x564F,
+	0x5652,
+	0x5653,
+	0x5657,
+	0x5834,
+	0x5835,
+	0x5954,
+	0x5955,
+	0x5974,
+	0x5975,
+	0x5960,
+	0x5961,
+	0x5962,
+	0x5964,
+	0x5965,
+	0x5969,
+	0x5a41,
+	0x5a42,
+	0x5a61,
+	0x5a62,
+	0x5b60,
+	0x5b62,
+	0x5b63,
+	0x5b64,
+	0x5b65,
+	0x5c61,
+	0x5c63,
+	0x5d48,
+	0x5d49,
+	0x5d4a,
+	0x5d4c,
+	0x5d4d,
+	0x5d4e,
+	0x5d4f,
+	0x5d50,
+	0x5d52,
+	0x5d57,
+	0x5e48,
+	0x5e4a,
+	0x5e4b,
+	0x5e4c,
+	0x5e4d,
+	0x5e4f,
+	0x6700,
+	0x6701,
+	0x6702,
+	0x6703,
+	0x6704,
+	0x6705,
+	0x6706,
+	0x6707,
+	0x6708,
+	0x6709,
+	0x6718,
+	0x6719,
+	0x671c,
+	0x671d,
+	0x671f,
+	0x6720,
+	0x6721,
+	0x6722,
+	0x6723,
+	0x6724,
+	0x6725,
+	0x6726,
+	0x6727,
+	0x6728,
+	0x6729,
+	0x6738,
+	0x6739,
+	0x673e,
+	0x6740,
+	0x6741,
+	0x6742,
+	0x6743,
+	0x6744,
+	0x6745,
+	0x6746,
+	0x6747,
+	0x6748,
+	0x6749,
+	0x674A,
+	0x6750,
+	0x6751,
+	0x6758,
+	0x6759,
+	0x675B,
+	0x675D,
+	0x675F,
+	0x6760,
+	0x6761,
+	0x6762,
+	0x6763,
+	0x6764,
+	0x6765,
+	0x6766,
+	0x6767,
+	0x6768,
+	0x6770,
+	0x6771,
+	0x6772,
+	0x6778,
+	0x6779,
+	0x677B,
+	0x6840,
+	0x6841,
+	0x6842,
+	0x6843,
+	0x6849,
+	0x684C,
+	0x6850,
+	0x6858,
+	0x6859,
+	0x6880,
+	0x6888,
+	0x6889,
+	0x688A,
+	0x688C,
+	0x688D,
+	0x6898,
+	0x6899,
+	0x689b,
+	0x689c,
+	0x689d,
+	0x689e,
+	0x68a0,
+	0x68a1,
+	0x68a8,
+	0x68a9,
+	0x68b0,
+	0x68b8,
+	0x68b9,
+	0x68ba,
+	0x68be,
+	0x68bf,
+	0x68c0,
+	0x68c1,
+	0x68c7,
+	0x68c8,
+	0x68c9,
+	0x68d8,
+	0x68d9,
+	0x68da,
+	0x68de,
+	0x68e0,
+	0x68e1,
+	0x68e4,
+	0x68e5,
+	0x68e8,
+	0x68e9,
+	0x68f1,
+	0x68f2,
+	0x68f8,
+	0x68f9,
+	0x68fa,
+	0x68fe,
+	0x7100,
+	0x7101,
+	0x7102,
+	0x7103,
+	0x7104,
+	0x7105,
+	0x7106,
+	0x7108,
+	0x7109,
+	0x710A,
+	0x710B,
+	0x710C,
+	0x710E,
+	0x710F,
+	0x7140,
+	0x7141,
+	0x7142,
+	0x7143,
+	0x7144,
+	0x7145,
+	0x7146,
+	0x7147,
+	0x7149,
+	0x714A,
+	0x714B,
+	0x714C,
+	0x714D,
+	0x714E,
+	0x714F,
+	0x7151,
+	0x7152,
+	0x7153,
+	0x715E,
+	0x715F,
+	0x7180,
+	0x7181,
+	0x7183,
+	0x7186,
+	0x7187,
+	0x7188,
+	0x718A,
+	0x718B,
+	0x718C,
+	0x718D,
+	0x718F,
+	0x7193,
+	0x7196,
+	0x719B,
+	0x719F,
+	0x71C0,
+	0x71C1,
+	0x71C2,
+	0x71C3,
+	0x71C4,
+	0x71C5,
+	0x71C6,
+	0x71C7,
+	0x71CD,
+	0x71CE,
+	0x71D2,
+	0x71D4,
+	0x71D5,
+	0x71D6,
+	0x71DA,
+	0x71DE,
+	0x7200,
+	0x7210,
+	0x7211,
+	0x7240,
+	0x7243,
+	0x7244,
+	0x7245,
+	0x7246,
+	0x7247,
+	0x7248,
+	0x7249,
+	0x724A,
+	0x724B,
+	0x724C,
+	0x724D,
+	0x724E,
+	0x724F,
+	0x7280,
+	0x7281,
+	0x7283,
+	0x7284,
+	0x7287,
+	0x7288,
+	0x7289,
+	0x728B,
+	0x728C,
+	0x7290,
+	0x7291,
+	0x7293,
+	0x7297,
+	0x7834,
+	0x7835,
+	0x791e,
+	0x791f,
+	0x793f,
+	0x7941,
+	0x7942,
+	0x796c,
+	0x796d,
+	0x796e,
+	0x796f,
+	0x9400,
+	0x9401,
+	0x9402,
+	0x9403,
+	0x9405,
+	0x940A,
+	0x940B,
+	0x940F,
+	0x94A0,
+	0x94A1,
+	0x94A3,
+	0x94B1,
+	0x94B3,
+	0x94B4,
+	0x94B5,
+	0x94B9,
+	0x9440,
+	0x9441,
+	0x9442,
+	0x9443,
+	0x9444,
+	0x9446,
+	0x944A,
+	0x944B,
+	0x944C,
+	0x944E,
+	0x9450,
+	0x9452,
+	0x9456,
+	0x945A,
+	0x945B,
+	0x945E,
+	0x9460,
+	0x9462,
+	0x946A,
+	0x946B,
+	0x947A,
+	0x947B,
+	0x9480,
+	0x9487,
+	0x9488,
+	0x9489,
+	0x948A,
+	0x948F,
+	0x9490,
+	0x9491,
+	0x9495,
+	0x9498,
+	0x949C,
+	0x949E,
+	0x949F,
+	0x94C0,
+	0x94C1,
+	0x94C3,
+	0x94C4,
+	0x94C5,
+	0x94C6,
+	0x94C7,
+	0x94C8,
+	0x94C9,
+	0x94CB,
+	0x94CC,
+	0x94CD,
+	0x9500,
+	0x9501,
+	0x9504,
+	0x9505,
+	0x9506,
+	0x9507,
+	0x9508,
+	0x9509,
+	0x950F,
+	0x9511,
+	0x9515,
+	0x9517,
+	0x9519,
+	0x9540,
+	0x9541,
+	0x9542,
+	0x954E,
+	0x954F,
+	0x9552,
+	0x9553,
+	0x9555,
+	0x9557,
+	0x955f,
+	0x9580,
+	0x9581,
+	0x9583,
+	0x9586,
+	0x9587,
+	0x9588,
+	0x9589,
+	0x958A,
+	0x958B,
+	0x958C,
+	0x958D,
+	0x958E,
+	0x958F,
+	0x9590,
+	0x9591,
+	0x9593,
+	0x9595,
+	0x9596,
+	0x9597,
+	0x9598,
+	0x9599,
+	0x959B,
+	0x95C0,
+	0x95C2,
+	0x95C4,
+	0x95C5,
+	0x95C6,
+	0x95C7,
+	0x95C9,
+	0x95CC,
+	0x95CD,
+	0x95CE,
+	0x95CF,
+	0x9610,
+	0x9611,
+	0x9612,
+	0x9613,
+	0x9614,
+	0x9615,
+	0x9616,
+	0x9640,
+	0x9641,
+	0x9642,
+	0x9643,
+	0x9644,
+	0x9645,
+	0x9647,
+	0x9648,
+	0x9649,
+	0x964a,
+	0x964b,
+	0x964c,
+	0x964e,
+	0x964f,
+	0x9710,
+	0x9711,
+	0x9712,
+	0x9713,
+	0x9714,
+	0x9715,
+	0x9802,
+	0x9803,
+	0x9804,
+	0x9805,
+	0x9806,
+	0x9807,
+	0x9808,
+	0x9809,
+	0x980A,
+	0x9900,
+	0x9901,
+	0x9903,
+	0x9904,
+	0x9905,
+	0x9906,
+	0x9907,
+	0x9908,
+	0x9909,
+	0x990A,
+	0x990B,
+	0x990C,
+	0x990D,
+	0x990E,
+	0x990F,
+	0x9910,
+	0x9913,
+	0x9917,
+	0x9918,
+	0x9919,
+	0x9990,
+	0x9991,
+	0x9992,
+	0x9993,
+	0x9994,
+	0x9995,
+	0x9996,
+	0x9997,
+	0x9998,
+	0x9999,
+	0x999A,
+	0x999B,
+	0x999C,
+	0x999D,
+	0x99A0,
+	0x99A2,
+	0x99A4,
+};
 
 static const struct pci_device_id pciidlist[] = {
 #ifdef  CONFIG_DRM_AMDGPU_SI
@@ -1148,6 +1799,7 @@ static const struct pci_device_id pciidlist[] = {
 	{0x1002, 0x734F, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_NAVI14},
 
 	/* Renoir */
+	{0x1002, 0x15E7, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_RENOIR|AMD_IS_APU},
 	{0x1002, 0x1636, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_RENOIR|AMD_IS_APU},
 	{0x1002, 0x1638, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_RENOIR|AMD_IS_APU},
 	{0x1002, 0x164C, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_RENOIR|AMD_IS_APU},
@@ -1161,7 +1813,12 @@ static const struct pci_device_id pciidlist[] = {
 	{0x1002, 0x73A1, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
 	{0x1002, 0x73A2, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
 	{0x1002, 0x73A3, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
+	{0x1002, 0x73A5, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
+	{0x1002, 0x73A8, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
+	{0x1002, 0x73A9, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
 	{0x1002, 0x73AB, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
+	{0x1002, 0x73AC, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
+	{0x1002, 0x73AD, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
 	{0x1002, 0x73AE, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
 	{0x1002, 0x73AF, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
 	{0x1002, 0x73BF, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_SIENNA_CICHLID},
@@ -1169,22 +1826,60 @@ static const struct pci_device_id pciidlist[] = {
 	/* Van Gogh */
 	{0x1002, 0x163F, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_VANGOGH|AMD_IS_APU},
 
+	/* Yellow Carp */
+	{0x1002, 0x164D, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_YELLOW_CARP|AMD_IS_APU},
+	{0x1002, 0x1681, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_YELLOW_CARP|AMD_IS_APU},
+
 	/* Navy_Flounder */
 	{0x1002, 0x73C0, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_NAVY_FLOUNDER},
 	{0x1002, 0x73C1, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_NAVY_FLOUNDER},
 	{0x1002, 0x73C3, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_NAVY_FLOUNDER},
+	{0x1002, 0x73DA, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_NAVY_FLOUNDER},
+	{0x1002, 0x73DB, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_NAVY_FLOUNDER},
+	{0x1002, 0x73DC, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_NAVY_FLOUNDER},
+	{0x1002, 0x73DD, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_NAVY_FLOUNDER},
+	{0x1002, 0x73DE, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_NAVY_FLOUNDER},
 	{0x1002, 0x73DF, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_NAVY_FLOUNDER},
 
 	/* DIMGREY_CAVEFISH */
 	{0x1002, 0x73E0, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
 	{0x1002, 0x73E1, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
 	{0x1002, 0x73E2, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
+	{0x1002, 0x73E3, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
+	{0x1002, 0x73E8, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
+	{0x1002, 0x73E9, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
+	{0x1002, 0x73EA, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
+	{0x1002, 0x73EB, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
+	{0x1002, 0x73EC, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
+	{0x1002, 0x73ED, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
+	{0x1002, 0x73EF, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
 	{0x1002, 0x73FF, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_DIMGREY_CAVEFISH},
 
 	/* Aldebaran */
 	{0x1002, 0x7408, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_ALDEBARAN|AMD_EXP_HW_SUPPORT},
 	{0x1002, 0x740C, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_ALDEBARAN|AMD_EXP_HW_SUPPORT},
 	{0x1002, 0x740F, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_ALDEBARAN|AMD_EXP_HW_SUPPORT},
+	{0x1002, 0x7410, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_ALDEBARAN|AMD_EXP_HW_SUPPORT},
+
+	/* CYAN_SKILLFISH */
+	{0x1002, 0x13FE, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_CYAN_SKILLFISH|AMD_IS_APU},
+
+	/* BEIGE_GOBY */
+	{0x1002, 0x7420, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_BEIGE_GOBY},
+	{0x1002, 0x7421, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_BEIGE_GOBY},
+	{0x1002, 0x7422, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_BEIGE_GOBY},
+	{0x1002, 0x7423, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_BEIGE_GOBY},
+	{0x1002, 0x743F, PCI_ANY_ID, PCI_ANY_ID, 0, 0, CHIP_BEIGE_GOBY},
+
+	{ PCI_DEVICE(0x1002, PCI_ANY_ID),
+	  .class = PCI_CLASS_DISPLAY_VGA << 8,
+	  .class_mask = 0xffffff,
+	  .driver_data = CHIP_IP_DISCOVERY },
+
+	{ PCI_DEVICE(0x1002, PCI_ANY_ID),
+	  .class = PCI_CLASS_DISPLAY_OTHER << 8,
+	  .class_mask = 0xffffff,
+	  .driver_data = CHIP_IP_DISCOVERY },
 
 	{0, 0, 0}
 };
@@ -1199,10 +1894,21 @@ static int amdgpu_pci_probe(struct pci_dev *pdev,
 	struct drm_device *ddev;
 	struct amdgpu_device *adev;
 	unsigned long flags = ent->driver_data;
-	int ret, retry = 0;
+	int ret, retry = 0, i;
 	bool supports_atomic = false;
 
-	if (!amdgpu_virtual_display &&
+	/* skip devices which are owned by radeon */
+	for (i = 0; i < ARRAY_SIZE(amdgpu_unsupported_pciidlist); i++) {
+		if (amdgpu_unsupported_pciidlist[i] == pdev->device)
+			return -ENODEV;
+	}
+
+	if (flags == 0) {
+		DRM_INFO("Unsupported asic.  Remove me when IP discovery init is in place.\n");
+		return -ENODEV;
+	}
+
+	if (amdgpu_virtual_display ||
 	    amdgpu_device_asic_has_dc_support(flags & AMD_ASIC_MASK))
 		supports_atomic = true;
 
@@ -1258,7 +1964,7 @@ static int amdgpu_pci_probe(struct pci_dev *pdev,
 #endif
 
 	/* Get rid of things like offb */
-	ret = drm_fb_helper_remove_conflicting_pci_framebuffers(pdev, "amdgpudrmfb");
+	ret = drm_aperture_remove_conflicting_pci_framebuffers(pdev, "amdgpudrmfb");
 	if (ret)
 		return ret;
 
@@ -1294,6 +2000,19 @@ retry_init:
 		goto err_pci;
 	}
 
+	/*
+	 * 1. don't init fbdev on hw without DCE
+	 * 2. don't init fbdev if there are no connectors
+	 */
+	if (adev->mode_info.mode_config_initialized &&
+	    !list_empty(&adev_to_drm(adev)->mode_config.connector_list)) {
+		/* select 8 bpp console on low vram cards */
+		if (adev->gmc.real_vram_size <= (32*1024*1024))
+			drm_fbdev_generic_setup(adev_to_drm(adev), 8);
+		else
+			drm_fbdev_generic_setup(adev_to_drm(adev), 32);
+	}
+
 	ret = amdgpu_debugfs_init(adev);
 	if (ret)
 		DRM_ERROR("Creating debugfs files failed (%d).\n", ret);
@@ -1310,14 +2029,16 @@ amdgpu_pci_remove(struct pci_dev *pdev)
 {
 	struct drm_device *dev = pci_get_drvdata(pdev);
 
-#ifdef MODULE
-	if (THIS_MODULE->state != MODULE_STATE_GOING)
-#endif
-		DRM_ERROR("Hotplug removal is not supported\n");
 	drm_dev_unplug(dev);
 	amdgpu_driver_unload_kms(dev);
+
+	/*
+	 * Flush any in flight DMA operations from device.
+	 * Clear the Bus Master Enable bit and then wait on the PCIe Device
+	 * StatusTransactions Pending bit.
+	 */
 	pci_disable_device(pdev);
-	pci_set_drvdata(pdev, NULL);
+	pci_wait_for_pending_transaction(pdev);
 }
 
 static void
@@ -1438,7 +2159,7 @@ static int amdgpu_pmops_suspend(struct device *dev)
 	struct amdgpu_device *adev = drm_to_adev(drm_dev);
 	int r;
 
-	if (amdgpu_acpi_is_s0ix_supported(adev))
+	if (amdgpu_acpi_is_s0ix_active(adev))
 		adev->in_s0ix = true;
 	adev->in_s3 = true;
 	r = amdgpu_device_suspend(drm_dev, true);
@@ -1453,8 +2174,12 @@ static int amdgpu_pmops_resume(struct device *dev)
 	struct amdgpu_device *adev = drm_to_adev(drm_dev);
 	int r;
 
+	/* Avoids registers access if device is physically gone */
+	if (!pci_device_is_present(adev->pdev))
+		adev->no_hw_access = true;
+
 	r = amdgpu_device_resume(drm_dev, true);
-	if (amdgpu_acpi_is_s0ix_supported(adev))
+	if (amdgpu_acpi_is_s0ix_active(adev))
 		adev->in_s0ix = false;
 	return r;
 }
@@ -1535,6 +2260,8 @@ static int amdgpu_pmops_runtime_suspend(struct device *dev)
 		pci_ignore_hotplug(pdev);
 		pci_set_power_state(pdev, PCI_D3cold);
 		drm_dev->switch_power_state = DRM_SWITCH_POWER_DYNAMIC_OFF;
+	} else if (amdgpu_device_supports_boco(drm_dev)) {
+		/* nothing to do */
 	} else if (amdgpu_device_supports_baco(drm_dev)) {
 		amdgpu_device_baco_enter(drm_dev);
 	}
@@ -1551,6 +2278,10 @@ static int amdgpu_pmops_runtime_resume(struct device *dev)
 
 	if (!adev->runpm)
 		return -EINVAL;
+
+	/* Avoids registers access if device is physically gone */
+	if (!pci_device_is_present(adev->pdev))
+		adev->no_hw_access = true;
 
 	if (amdgpu_device_supports_px(drm_dev)) {
 		drm_dev->switch_power_state = DRM_SWITCH_POWER_CHANGING;
@@ -1597,16 +2328,14 @@ static int amdgpu_pmops_runtime_idle(struct device *dev)
 	if (amdgpu_device_has_dc_support(adev)) {
 		struct drm_crtc *crtc;
 
-		drm_modeset_lock_all(drm_dev);
-
 		drm_for_each_crtc(crtc, drm_dev) {
-			if (crtc->state->active) {
+			drm_modeset_lock(&crtc->mutex, NULL);
+			if (crtc->state->active)
 				ret = -EBUSY;
+			drm_modeset_unlock(&crtc->mutex);
+			if (ret < 0)
 				break;
-			}
 		}
-
-		drm_modeset_unlock_all(drm_dev);
 
 	} else {
 		struct drm_connector *list_connector;
@@ -1688,11 +2417,14 @@ static const struct file_operations amdgpu_driver_kms_fops = {
 	.flush = amdgpu_flush,
 	.release = drm_release,
 	.unlocked_ioctl = amdgpu_drm_ioctl,
-	.mmap = amdgpu_mmap,
+	.mmap = drm_gem_mmap,
 	.poll = drm_poll,
 	.read = drm_read,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = amdgpu_kms_compat_ioctl,
+#endif
+#ifdef CONFIG_PROC_FS
+	.show_fdinfo = amdgpu_show_fdinfo
 #endif
 };
 
@@ -1747,11 +2479,12 @@ static const struct drm_driver amdgpu_kms_driver = {
 	.dumb_create = amdgpu_mode_dumb_create,
 	.dumb_map_offset = amdgpu_mode_dumb_mmap,
 	.fops = &amdgpu_driver_kms_fops,
+	.release = &amdgpu_driver_release_kms,
 
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
 	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
 	.gem_prime_import = amdgpu_gem_prime_import,
-	.gem_prime_mmap = amdgpu_gem_prime_mmap,
+	.gem_prime_mmap = drm_gem_prime_mmap,
 
 	.name = DRIVER_NAME,
 	.desc = DRIVER_DESC,
@@ -1768,6 +2501,18 @@ static struct pci_error_handlers amdgpu_pci_err_handler = {
 	.resume		= amdgpu_pci_resume,
 };
 
+extern const struct attribute_group amdgpu_vram_mgr_attr_group;
+extern const struct attribute_group amdgpu_gtt_mgr_attr_group;
+extern const struct attribute_group amdgpu_vbios_version_attr_group;
+
+static const struct attribute_group *amdgpu_sysfs_groups[] = {
+	&amdgpu_vram_mgr_attr_group,
+	&amdgpu_gtt_mgr_attr_group,
+	&amdgpu_vbios_version_attr_group,
+	NULL,
+};
+
+
 static struct pci_driver amdgpu_kms_pci_driver = {
 	.name = DRIVER_NAME,
 	.id_table = pciidlist,
@@ -1776,6 +2521,7 @@ static struct pci_driver amdgpu_kms_pci_driver = {
 	.shutdown = amdgpu_pci_shutdown,
 	.driver.pm = &amdgpu_pm_ops,
 	.err_handler = &amdgpu_pci_err_handler,
+	.dev_groups = amdgpu_sysfs_groups,
 };
 
 static int __init amdgpu_init(void)
@@ -1797,6 +2543,7 @@ static int __init amdgpu_init(void)
 
 	DRM_INFO("amdgpu kernel modesetting enabled.\n");
 	amdgpu_register_atpx_handler();
+	amdgpu_acpi_detect();
 
 	/* Ignore KFD init failures. Normal when CONFIG_HSA_AMD is not set. */
 	amdgpu_amdkfd_init();
