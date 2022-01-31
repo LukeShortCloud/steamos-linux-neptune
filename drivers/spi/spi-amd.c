@@ -220,7 +220,10 @@ static int amd_spi_exec_transfer(struct amd_spi *amd_spi, u8 opcode, u8 tx_len, 
 	struct list_head *p;
 	int ret, i;
 
-	amd_spi_set_opcode(amd_spi, opcode);
+	ret = amd_spi_set_opcode(amd_spi, opcode);
+	if (ret)
+		return ret;
+
 	amd_spi_set_tx_count(amd_spi, tx_len);
 	amd_spi_set_rx_count(amd_spi, rx_len);
 
