@@ -89,6 +89,7 @@ struct amd_spi {
 	unsigned long io_base_addr;
 	enum amd_spi_versions version;
 	struct list_head rbuf_head;
+	struct spi_master *master;
 	u32 speed_hz;
 };
 
