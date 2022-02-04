@@ -40,6 +40,7 @@
 #define AMD_SPI_RX_COUNT_REG	0x4B
 #define AMD_SPI_STATUS_REG	0x4C
 
+#define AMD_SPI_FIFO_SIZE	70
 #define AMD_SPI_MEM_SIZE	200
 
 /* M_CMD OP codes for SPI */
@@ -55,6 +56,12 @@ struct amd_spi {
 	void __iomem *io_remap_addr;
 	unsigned long io_base_addr;
 	enum amd_spi_versions version;
+	struct list_head rbuf_head;
+};
+
+struct amd_spi_rx_buffer {
+	struct list_head list;
+	struct spi_transfer *xfer;
 };
 
 static inline u8 amd_spi_readreg8(struct amd_spi *amd_spi, int idx)
@@ -186,95 +193,141 @@ static int amd_spi_master_setup(struct spi_device *spi)
 	return 0;
 }
 
-static inline int amd_spi_fifo_xfer(struct amd_spi *amd_spi,
-				    struct spi_master *master,
-				    struct spi_message *message)
+static void amd_spi_clear_list(struct amd_spi *amd_spi)
 {
-	struct spi_transfer *xfer = NULL;
-	u8 cmd_opcode;
-	u8 *buf = NULL;
-	u32 m_cmd = 0;
-	u32 i = 0;
-	u32 tx_len = 0, rx_len = 0;
+	struct amd_spi_rx_buffer *rbuf, *tmp;
 
-	list_for_each_entry(xfer, &message->transfers,
-			    transfer_list) {
-		if (xfer->rx_buf)
-			m_cmd = AMD_SPI_XFER_RX;
-		if (xfer->tx_buf)
-			m_cmd = AMD_SPI_XFER_TX;
+	list_for_each_entry_safe(rbuf, tmp, &amd_spi->rbuf_head, list) {
+		list_del(&rbuf->list);
+		kfree(rbuf);
+	}
+}
 
-		if (m_cmd & AMD_SPI_XFER_TX) {
-			buf = (u8 *)xfer->tx_buf;
-			tx_len = xfer->len - 1;
-			cmd_opcode = *(u8 *)xfer->tx_buf;
-			buf++;
-			amd_spi_set_opcode(amd_spi, cmd_opcode);
+/**
+ * amd_spi_exec_transfer - Fill registers and trigger an execution
+ * @amd_spi: driver data
+ * @opcode: operation to be performed
+ * @tx_len: write length
+ * @rx_len: read length
+ * @fifo_pos: current position in the queue
+ *
+ * Set registers for the transfer, execute the ROM opcode and finally do the
+ * enqueued reading. The writing is done by amd_spi_transfer_one_message.
+ */
+static int amd_spi_exec_transfer(struct amd_spi *amd_spi, u8 opcode, u8 tx_len, u8 rx_len, u8 fifo_pos)
+{
+	struct amd_spi_rx_buffer *rbuf;
+	struct list_head *p;
+	int ret, i;
 
-			/* Write data into the FIFO. */
-			for (i = 0; i < tx_len; i++) {
-				iowrite8(buf[i], ((u8 __iomem *)amd_spi->io_remap_addr +
-					 AMD_SPI_FIFO_BASE + i));
+	amd_spi_set_opcode(amd_spi, opcode);
+	amd_spi_set_tx_count(amd_spi, tx_len);
+	amd_spi_set_rx_count(amd_spi, rx_len);
+
+	ret = amd_spi_execute_opcode(amd_spi);
+	if (ret)
+		return ret;
+
+	if (!list_empty(&amd_spi->rbuf_head)) {
+		ret = amd_spi_busy_wait(amd_spi);
+		if (ret)
+			return ret;
+		list_for_each(p, &amd_spi->rbuf_head) {
+			rbuf = list_entry(p, struct amd_spi_rx_buffer, list);
+			for (i = 0; i < rbuf->xfer->len; i++)
+				((u8 *)rbuf->xfer->rx_buf)[i] = amd_spi_readreg8(amd_spi, fifo_pos++);
+		}
+		amd_spi_clear_list(amd_spi);
+	}
+
+	return 0;
+}
+
+/**
+ * amd_spi_transfer_one_message - Prepare a queue of messages and transfer
+ * @ctrl: Device data
+ * @msg: Message to transfer
+ *
+ * In order to transfer a message, this device requires to execute all the
+ * writes, then the reads and finally the chip select. This function guarantees
+ * that, by writing everything first while enqueueing all reads to be done
+ * after the last write or when a there's a chip select. The message max size is
+ * AMD_SPI_FIFO_SIZE. The SPI ROM command code can be found in the first byte
+ * of tx buffer.
+ */
+static int amd_spi_transfer_one_message(struct spi_controller *ctrl, struct spi_message *msg)
+{
+	struct amd_spi *amd_spi = spi_master_get_devdata(ctrl);
+	u8 tx_len = 0, rx_len = 0, opcode = 0, fifo_pos = AMD_SPI_FIFO_BASE;
+	struct amd_spi_rx_buffer *rbuf;
+	struct spi_transfer *xfer;
+	u8 *tx_buf;
+	int ret = 0, i;
+
+	amd_spi_select_chip(amd_spi, msg->spi->chip_select);
+
+	list_for_each_entry(xfer, &msg->transfers, transfer_list) {
+		if (xfer->tx_buf) {
+			tx_buf = (u8 *)xfer->tx_buf;
+			if (!tx_len) {
+				opcode = tx_buf[0];
+				xfer->len--;
+				tx_buf++;
+			}
+			tx_len += xfer->len;
+			for (i = 0; i < xfer->len; i++)
+				amd_spi_writereg8(amd_spi, fifo_pos++, tx_buf[i]);
+		} else {
+			rx_len += xfer->len;
+			rbuf = kmalloc(sizeof(*rbuf), GFP_KERNEL);
+			if (!rbuf) {
+				ret = -ENOMEM;
+				break;
 			}
 
-			amd_spi_set_tx_count(amd_spi, tx_len);
-			amd_spi_clear_fifo_ptr(amd_spi);
-			/* Execute command */
-			amd_spi_execute_opcode(amd_spi);
+			rbuf->xfer = xfer;
+			list_add_tail(&rbuf->list, &amd_spi->rbuf_head);
 		}
-		if (m_cmd & AMD_SPI_XFER_RX) {
-			/*
-			 * Store no. of bytes to be received from
-			 * FIFO
-			 */
-			rx_len = xfer->len;
-			buf = (u8 *)xfer->rx_buf;
-			amd_spi_set_rx_count(amd_spi, rx_len);
-			amd_spi_clear_fifo_ptr(amd_spi);
-			/* Execute command */
-			amd_spi_execute_opcode(amd_spi);
-			amd_spi_busy_wait(amd_spi);
-			/* Read data from FIFO to receive buffer  */
-			for (i = 0; i < rx_len; i++)
-				buf[i] = amd_spi_readreg8(amd_spi, AMD_SPI_FIFO_BASE + tx_len + i);
+
+		if (xfer->cs_change || list_is_last(&xfer->transfer_list, &msg->transfers)) {
+			ret = amd_spi_exec_transfer(amd_spi, opcode, tx_len, rx_len, fifo_pos);
+			if (ret)
+				break;
+
+			msg->actual_length += rx_len;
+			if (tx_len)
+				msg->actual_length += tx_len + 1;
+
+			fifo_pos = AMD_SPI_FIFO_BASE;
+			opcode = 0;
+			tx_len = 0;
+			rx_len = 0;
 		}
 	}
 
-	/* Update statistics */
-	message->actual_length = tx_len + rx_len + 1;
+	if (!list_empty(&amd_spi->rbuf_head))
+		amd_spi_clear_list(amd_spi);
 	/* complete the transaction */
-	message->status = 0;
+	msg->status = ret;
 
 	switch (amd_spi->version) {
 	case AMD_SPI_V1:
 		break;
 	case AMD_SPI_V2:
-		amd_spi_clear_chip(amd_spi, message->spi->chip_select);
+		amd_spi_clear_chip(amd_spi, msg->spi->chip_select);
 		break;
 	default:
 		return -ENODEV;
 	}
 
-	spi_finalize_current_message(master);
+	spi_finalize_current_message(ctrl);
 
-	return 0;
+	return ret;
 }
 
-static int amd_spi_master_transfer(struct spi_master *master,
-				   struct spi_message *msg)
+static size_t amd_spi_max_transfer_size(struct spi_device *spi)
 {
-	struct amd_spi *amd_spi = spi_master_get_devdata(master);
-	struct spi_device *spi = msg->spi;
-
-	amd_spi_select_chip(amd_spi, spi->chip_select);
-
-	/*
-	 * Extract spi_transfers from the spi message and
-	 * program the controller.
-	 */
-	amd_spi_fifo_xfer(amd_spi, master, msg);
-
-	return 0;
+	return AMD_SPI_FIFO_SIZE;
 }
 
 static int amd_spi_probe(struct platform_device *pdev)
@@ -308,7 +361,9 @@ static int amd_spi_probe(struct platform_device *pdev)
 	master->mode_bits = 0;
 	master->flags = SPI_MASTER_HALF_DUPLEX;
 	master->setup = amd_spi_master_setup;
-	master->transfer_one_message = amd_spi_master_transfer;
+	master->transfer_one_message = amd_spi_transfer_one_message;
+	master->max_transfer_size = amd_spi_max_transfer_size;
+	master->max_message_size = amd_spi_max_transfer_size;
 
 	/* Register the controller with SPI framework */
 	err = devm_spi_register_master(dev, master);
