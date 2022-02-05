@@ -1320,6 +1320,13 @@ config JUPITER
          This driver exposes various bits of Jupiter platform specific
          ACPI functionality.
 
+config STEAMDECK
+       tristate "Valve Steam Deck platform driver"
+       depends on X86_64
+       help
+         This driver exposes various bits of Steam Deck specific ACPI
+         functionality.
+
 endif # X86_PLATFORM_DEVICES
 
 config PMC_ATOM

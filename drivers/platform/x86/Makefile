@@ -145,3 +145,5 @@ obj-$(CONFIG_PMC_ATOM)			+= pmc_atom.o
 
 # Jupiter device
 obj-$(CONFIG_JUPITER)			+= jupiter.o
+
+obj-$(CONFIG_STEAMDECK)			+= steamdeck.o
