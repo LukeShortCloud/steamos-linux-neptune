@@ -104,15 +104,15 @@ STEAMDECK_ATTR_WO_NOARG(idle_mode_on, "WRNE");
 				    struct device_attribute *attr,	\
 				    char *buf)				\
 	{								\
-		struct steamdeck *jup = dev_get_drvdata(dev);		\
+		struct steamdeck *sd = dev_get_drvdata(dev);		\
 		unsigned long long val;					\
 									\
 		if (ACPI_FAILURE(acpi_evaluate_integer(			\
-					 jup->adev->handle,		\
+					 sd->adev->handle,		\
 					 _method, NULL, &val)))		\
 			return -EIO;					\
 									\
-		return sprintf(buf, "%llu\n", val);			\
+		return sysfs_emit(buf, "%llu\n", val);			\
 	}								\
 	static DEVICE_ATTR_RO(_name)
 
@@ -120,13 +120,7 @@ STEAMDECK_ATTR_RO(firmware_version, "PDFW");
 STEAMDECK_ATTR_RO(board_id, "BOID");
 STEAMDECK_ATTR_RO(pdcs, "PDCS");
 
-static umode_t
-steamdeck_is_visible(struct kobject *kobj, struct attribute *attr, int index)
-{
-	return attr->mode;
-}
-
-static struct attribute *steamdeck_attributes[] = {
+static struct attribute *steamdeck_attrs[] = {
 	&dev_attr_target_cpu_temp.attr,
 	&dev_attr_gain.attr,
 	&dev_attr_ramp_rate.attr,
@@ -155,15 +149,7 @@ static struct attribute *steamdeck_attributes[] = {
 	NULL
 };
 
-static const struct attribute_group steamdeck_group = {
-	.attrs = steamdeck_attributes,
-	.is_visible = steamdeck_is_visible,
-};
-
-static const struct attribute_group *steamdeck_groups[] = {
-	&steamdeck_group,
-	NULL
-};
+ATTRIBUTE_GROUPS(steamdeck);
 
 static int steamdeck_read_fan_speed(struct steamdeck *jup, long *speed)
 {
@@ -256,9 +242,7 @@ steamdeck_hwmon_write(struct device *dev, enum hwmon_sensor_types type,
 	    attr != hwmon_fan_target)
 		return -EOPNOTSUPP;
 
-	if (val > U16_MAX)
-		return -EINVAL;
-
+	val = clamp_val(val, 0, U16_MAX);
 	sd->fan_target = val;
 
 	if (ACPI_FAILURE(acpi_execute_simple_method(sd->adev->handle,
@@ -392,7 +376,7 @@ static void steamdeck_notify(acpi_handle handle, u32 event, void *context)
 		queue_delayed_work(system_long_wq, &sd->role_work, delay);
 		break;
 	default:
-		dev_err(dev, "Unsupported event [0x%x]\n", event);
+		dev_warn(dev, "Unsupported event [0x%x]\n", event);
 	}
 }
 
@@ -475,7 +459,7 @@ static int steamdeck_probe(struct platform_device *pdev)
 
 	sd->edev = devm_extcon_dev_allocate(dev, steamdeck_extcon_cable);
 	if (IS_ERR(sd->edev))
-		return -ENOMEM;
+		return PTR_ERR(sd->edev);
 
 	ret = devm_extcon_dev_register(dev, sd->edev);
 	if (ret < 0) {
