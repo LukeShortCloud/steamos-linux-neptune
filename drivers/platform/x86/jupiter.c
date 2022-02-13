@@ -188,6 +188,22 @@ static int jupiter_hwmon_read(struct device *dev, enum hwmon_sensor_types type,
 	unsigned long long val;
 
 	switch (type) {
+	case hwmon_curr:
+		if (attr != hwmon_curr_input)
+			return -EOPNOTSUPP;
+		if (ACPI_FAILURE(acpi_evaluate_integer(jup->adev->handle,
+						       "PDAM", NULL, &val)))
+			return -EIO;
+		*out = val;
+		break;
+	case hwmon_in:
+		if (attr != hwmon_in_input)
+			return -EOPNOTSUPP;
+		if (ACPI_FAILURE(acpi_evaluate_integer(jup->adev->handle,
+						       "PDVL", NULL, &val)))
+			return -EIO;
+		*out = val;
+		break;
 	case hwmon_temp:
 		if (attr != hwmon_temp_input)
 			return -EOPNOTSUPP;
@@ -236,6 +252,12 @@ jupiter_hwmon_read_string(struct device *dev, enum hwmon_sensor_types type,
 			  u32 attr, int channel, const char **str)
 {
 	switch (type) {
+	case hwmon_curr:
+		*str = "PD Contract Current";
+		break;
+	case hwmon_in:
+		*str = "PD Contract Voltage";
+		break;
 	case hwmon_temp:
 		*str = "Battery Temp";
 		break;
@@ -282,6 +304,10 @@ jupiter_hwmon_is_visible(const void *data, enum hwmon_sensor_types type,
 }
 
 static const struct hwmon_channel_info *jupiter_info[] = {
+	HWMON_CHANNEL_INFO(in,
+			   HWMON_I_INPUT | HWMON_I_LABEL),
+	HWMON_CHANNEL_INFO(curr,
+			   HWMON_C_INPUT | HWMON_C_LABEL),
 	HWMON_CHANNEL_INFO(temp,
 			   HWMON_T_INPUT | HWMON_T_LABEL),
 	HWMON_CHANNEL_INFO(fan,
