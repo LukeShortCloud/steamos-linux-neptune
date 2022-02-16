@@ -75,18 +75,6 @@ enum dce_environment {
 #define IS_DIAG_DC(dce_environment) \
 	(IS_FPGA_MAXIMUS_DC(dce_environment) || (dce_environment == DCE_ENV_DIAG))
 
-struct hw_asic_id {
-	uint32_t chip_id;
-	uint32_t chip_family;
-	uint32_t pci_revision_id;
-	uint32_t hw_internal_rev;
-	uint32_t vram_type;
-	uint32_t vram_width;
-	uint32_t feature_flags;
-	uint32_t fake_paths_num;
-	void *atombios_base_address;
-};
-
 struct dc_perf_trace {
 	unsigned long read_count;
 	unsigned long write_count;
@@ -94,36 +82,7 @@ struct dc_perf_trace {
 	unsigned long last_entry_write;
 };
 
-struct dc_context {
-	struct dc *dc;
-
-	void *driver_context; /* e.g. amdgpu_device */
-	struct dc_perf_trace *perf_trace;
-	void *cgs_device;
-
-	enum dce_environment dce_environment;
-	struct hw_asic_id asic_id;
-
-	/* todo: below should probably move to dc.  to facilitate removal
-	 * of AS we will store these here
-	 */
-	enum dce_version dce_version;
-	struct dc_bios *dc_bios;
-	bool created_bios;
-	struct gpio_service *gpio_service;
-	uint32_t dc_sink_id_count;
-	uint32_t dc_stream_id_count;
-	uint32_t dc_edp_id_count;
-	uint64_t fbc_gpu_addr;
-	struct dc_dmub_srv *dmub_srv;
-
-#ifdef CONFIG_DRM_AMD_DC_HDCP
-	struct cp_psp cp_psp;
-#endif
-};
-
-
-#define DC_MAX_EDID_BUFFER_SIZE 1280
+#define DC_MAX_EDID_BUFFER_SIZE 2048
 #define DC_EDID_BLOCK_SIZE 128
 #define MAX_SURFACE_NUM 4
 #define NUM_PIXEL_FORMATS 10
@@ -271,11 +230,6 @@ struct dc_edid_caps {
 	struct dc_panel_patch panel_patch;
 };
 
-struct view {
-	uint32_t width;
-	uint32_t height;
-};
-
 struct dc_mode_flags {
 	/* note: part of refresh rate flag*/
 	uint32_t INTERLACE :1;
@@ -404,7 +358,7 @@ enum dc_connection_type {
 	dc_connection_none,
 	dc_connection_single,
 	dc_connection_mst_branch,
-	dc_connection_active_dongle
+	dc_connection_sst_branch
 };
 
 struct dc_csc_adjustments {
@@ -441,8 +395,26 @@ struct dc_lttpr_caps {
 	uint8_t max_link_rate;
 	uint8_t phy_repeater_cnt;
 	uint8_t max_ext_timeout;
+#if defined(CONFIG_DRM_AMD_DC_DCN)
+	union dp_main_link_channel_coding_lttpr_cap main_link_channel_coding;
+	union dp_128b_132b_supported_lttpr_link_rates supported_128b_132b_rates;
+#endif
 	uint8_t aux_rd_interval[MAX_REPEATER_CNT - 1];
 };
+
+#if defined(CONFIG_DRM_AMD_DC_DCN)
+struct dc_dongle_dfp_cap_ext {
+	bool supported;
+	uint16_t max_pixel_rate_in_mps;
+	uint16_t max_video_h_active_width;
+	uint16_t max_video_v_active_height;
+	struct dp_encoding_format_caps encoding_format_caps;
+	struct dp_color_depth_caps rgb_color_depth_caps;
+	struct dp_color_depth_caps ycbcr444_color_depth_caps;
+	struct dp_color_depth_caps ycbcr422_color_depth_caps;
+	struct dp_color_depth_caps ycbcr420_color_depth_caps;
+};
+#endif
 
 struct dc_dongle_caps {
 	/* dongle type (DP converter, CV smart dongle) */
@@ -457,6 +429,9 @@ struct dc_dongle_caps {
 	bool is_dp_hdmi_ycbcr420_converter;
 	uint32_t dp_hdmi_max_bpc;
 	uint32_t dp_hdmi_max_pixel_clk_in_khz;
+#if defined(CONFIG_DRM_AMD_DC_DCN)
+	struct dc_dongle_dfp_cap_ext dfp_cap_ext;
+#endif
 };
 /* Scaling format */
 enum scaling_transformation {
@@ -841,6 +816,46 @@ struct dc_clock_config {
 	uint32_t current_clock_khz;/*current clock in use*/
 };
 
+struct hw_asic_id {
+	uint32_t chip_id;
+	uint32_t chip_family;
+	uint32_t pci_revision_id;
+	uint32_t hw_internal_rev;
+	uint32_t vram_type;
+	uint32_t vram_width;
+	uint32_t feature_flags;
+	uint32_t fake_paths_num;
+	void *atombios_base_address;
+};
+
+struct dc_context {
+	struct dc *dc;
+
+	void *driver_context; /* e.g. amdgpu_device */
+	struct dc_perf_trace *perf_trace;
+	void *cgs_device;
+
+	enum dce_environment dce_environment;
+	struct hw_asic_id asic_id;
+
+	/* todo: below should probably move to dc.  to facilitate removal
+	 * of AS we will store these here
+	 */
+	enum dce_version dce_version;
+	struct dc_bios *dc_bios;
+	bool created_bios;
+	struct gpio_service *gpio_service;
+	uint32_t dc_sink_id_count;
+	uint32_t dc_stream_id_count;
+	uint32_t dc_edp_id_count;
+	uint64_t fbc_gpu_addr;
+	struct dc_dmub_srv *dmub_srv;
+#ifdef CONFIG_DRM_AMD_DC_HDCP
+	struct cp_psp cp_psp;
+#endif
+
+};
+
 /* DSC DPCD capabilities */
 union dsc_slice_caps1 {
 	struct {
@@ -909,6 +924,7 @@ struct dsc_dec_dpcd_caps {
 	uint32_t branch_overall_throughput_0_mps; /* In MPs */
 	uint32_t branch_overall_throughput_1_mps; /* In MPs */
 	uint32_t branch_max_line_width;
+	bool is_dp;
 };
 
 struct dc_golden_table {

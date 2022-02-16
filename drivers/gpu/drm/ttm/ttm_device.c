@@ -36,11 +36,11 @@
 
 #include "ttm_module.h"
 
-/**
+/*
  * ttm_global_mutex - protecting the global state
  */
-DEFINE_MUTEX(ttm_global_mutex);
-unsigned ttm_glob_use_count;
+static DEFINE_MUTEX(ttm_global_mutex);
+static unsigned ttm_glob_use_count;
 struct ttm_global ttm_glob;
 EXPORT_SYMBOL(ttm_glob);
 
@@ -104,7 +104,7 @@ out:
 	return ret;
 }
 
-/**
+/*
  * A buffer object shrink method that tries to swap out the first
  * buffer object on the global::swap_lru list.
  */
@@ -159,21 +159,6 @@ int ttm_device_swapout(struct ttm_device *bdev, struct ttm_operation_ctx *ctx,
 }
 EXPORT_SYMBOL(ttm_device_swapout);
 
-static void ttm_init_sysman(struct ttm_device *bdev)
-{
-	struct ttm_resource_manager *man = &bdev->sysman;
-
-	/*
-	 * Initialize the system memory buffer type.
-	 * Other types need to be driver / IOCTL initialized.
-	 */
-	man->use_tt = true;
-
-	ttm_resource_manager_init(man, 0);
-	ttm_set_driver_manager(bdev, TTM_PL_SYSTEM, man);
-	ttm_resource_manager_set_used(man, true);
-}
-
 static void ttm_device_delayed_workqueue(struct work_struct *work)
 {
 	struct ttm_device *bdev =
@@ -216,13 +201,14 @@ int ttm_device_init(struct ttm_device *bdev, struct ttm_device_funcs *funcs,
 
 	bdev->funcs = funcs;
 
-	ttm_init_sysman(bdev);
+	ttm_sys_man_init(bdev);
 	ttm_pool_init(&bdev->pool, dev, use_dma_alloc, use_dma32);
 
 	bdev->vma_manager = vma_manager;
 	INIT_DELAYED_WORK(&bdev->wq, ttm_device_delayed_workqueue);
 	spin_lock_init(&bdev->lru_lock);
 	INIT_LIST_HEAD(&bdev->ddestroy);
+	INIT_LIST_HEAD(&bdev->pinned);
 	bdev->dev_mapping = mapping;
 	mutex_lock(&ttm_global_mutex);
 	list_add_tail(&bdev->device_list, &glob->device_list);
@@ -260,3 +246,50 @@ void ttm_device_fini(struct ttm_device *bdev)
 	ttm_global_release();
 }
 EXPORT_SYMBOL(ttm_device_fini);
+
+void ttm_device_clear_dma_mappings(struct ttm_device *bdev)
+{
+	struct ttm_resource_manager *man;
+	struct ttm_buffer_object *bo;
+	unsigned int i, j;
+
+	spin_lock(&bdev->lru_lock);
+	while (!list_empty(&bdev->pinned)) {
+		bo = list_first_entry(&bdev->pinned, struct ttm_buffer_object, lru);
+		/* Take ref against racing releases once lru_lock is unlocked */
+		if (ttm_bo_get_unless_zero(bo)) {
+			list_del_init(&bo->lru);
+			spin_unlock(&bdev->lru_lock);
+
+			if (bo->ttm)
+				ttm_tt_unpopulate(bo->bdev, bo->ttm);
+
+			ttm_bo_put(bo);
+			spin_lock(&bdev->lru_lock);
+		}
+	}
+
+	for (i = TTM_PL_SYSTEM; i < TTM_NUM_MEM_TYPES; ++i) {
+		man = ttm_manager_type(bdev, i);
+		if (!man || !man->use_tt)
+			continue;
+
+		for (j = 0; j < TTM_MAX_BO_PRIORITY; ++j) {
+			while (!list_empty(&man->lru[j])) {
+				bo = list_first_entry(&man->lru[j], struct ttm_buffer_object, lru);
+				if (ttm_bo_get_unless_zero(bo)) {
+					list_del_init(&bo->lru);
+					spin_unlock(&bdev->lru_lock);
+
+					if (bo->ttm)
+						ttm_tt_unpopulate(bo->bdev, bo->ttm);
+
+					ttm_bo_put(bo);
+					spin_lock(&bdev->lru_lock);
+				}
+			}
+		}
+	}
+	spin_unlock(&bdev->lru_lock);
+}
+EXPORT_SYMBOL(ttm_device_clear_dma_mappings);

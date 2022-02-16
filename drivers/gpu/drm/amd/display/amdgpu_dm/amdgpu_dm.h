@@ -46,6 +46,9 @@
 
 #define AMDGPU_DM_MAX_CRTC 6
 
+#define AMDGPU_DM_MAX_NUM_EDP 2
+
+#define AMDGPU_DMUB_NOTIFICATION_MAX 5
 /*
 #include "include/amdgpu_dal_power_if.h"
 #include "amdgpu_dm_irq.h"
@@ -54,14 +57,18 @@
 #include "irq_types.h"
 #include "signal_types.h"
 #include "amdgpu_dm_crc.h"
+struct aux_payload;
+enum aux_return_code_type;
 
 /* Forward declarations */
 struct amdgpu_device;
+struct amdgpu_crtc;
 struct drm_device;
 struct dc;
 struct amdgpu_bo;
 struct dmub_srv;
 struct dc_plane_state;
+struct dmub_notification;
 
 struct common_irq_params {
 	struct amdgpu_device *adev;
@@ -81,17 +88,34 @@ struct dm_compressor_info {
 	uint64_t gpu_addr;
 };
 
+typedef void (*dmub_notify_interrupt_callback_t)(struct amdgpu_device *adev, struct dmub_notification *notify);
+
 /**
- * struct vblank_workqueue - Works to be executed in a separate thread during vblank
- * @mall_work: work for mall stutter
- * @dm: amdgpu display manager device
- * @otg_inst: otg instance of which vblank is being set
- * @enable: true if enable vblank
+ * struct dmub_hpd_work - Handle time consuming work in low priority outbox IRQ
+ *
+ * @handle_hpd_work: Work to be executed in a separate thread to handle hpd_low_irq
+ * @dmub_notify:  notification for callback function
+ * @adev: amdgpu_device pointer
  */
-struct vblank_workqueue {
-	struct work_struct mall_work;
+struct dmub_hpd_work {
+	struct work_struct handle_hpd_work;
+	struct dmub_notification *dmub_notify;
+	struct amdgpu_device *adev;
+};
+
+/**
+ * struct vblank_control_work - Work data for vblank control
+ * @work: Kernel work data for the work event
+ * @dm: amdgpu display manager device
+ * @acrtc: amdgpu CRTC instance for which the event has occurred
+ * @stream: DC stream for which the event has occurred
+ * @enable: true if enabling vblank
+ */
+struct vblank_control_work {
+	struct work_struct work;
 	struct amdgpu_display_manager *dm;
-	int otg_inst;
+	struct amdgpu_crtc *acrtc;
+	struct dc_stream_state *stream;
 	bool enable;
 };
 
@@ -135,12 +159,58 @@ struct amdgpu_dm_backlight_caps {
 
 /**
  * struct dal_allocation - Tracks mapped FB memory for SMU communication
+ * @list: list of dal allocations
+ * @bo: GPU buffer object
+ * @cpu_ptr: CPU virtual address of the GPU buffer object
+ * @gpu_addr: GPU virtual address of the GPU buffer object
  */
 struct dal_allocation {
 	struct list_head list;
 	struct amdgpu_bo *bo;
 	void *cpu_ptr;
 	u64 gpu_addr;
+};
+
+/**
+ * struct hpd_rx_irq_offload_work_queue - Work queue to handle hpd_rx_irq
+ * offload work
+ */
+struct hpd_rx_irq_offload_work_queue {
+	/**
+	 * @wq: workqueue structure to queue offload work.
+	 */
+	struct workqueue_struct *wq;
+	/**
+	 * @offload_lock: To protect fields of offload work queue.
+	 */
+	spinlock_t offload_lock;
+	/**
+	 * @is_handling_link_loss: Used to prevent inserting link loss event when
+	 * we're handling link loss
+	 */
+	bool is_handling_link_loss;
+	/**
+	 * @aconnector: The aconnector that this work queue is attached to
+	 */
+	struct amdgpu_dm_connector *aconnector;
+};
+
+/**
+ * struct hpd_rx_irq_offload_work - hpd_rx_irq offload work structure
+ */
+struct hpd_rx_irq_offload_work {
+	/**
+	 * @work: offload work
+	 */
+	struct work_struct work;
+	/**
+	 * @data: reference irq data which is used while handling offload work
+	 */
+	union hpd_irq_data data;
+	/**
+	 * @offload_wq: offload work queue that this work is queued to
+	 */
+	struct hpd_rx_irq_offload_work_queue *offload_wq;
 };
 
 /**
@@ -164,6 +234,7 @@ struct dal_allocation {
  * @compressor: Frame buffer compression buffer. See &struct dm_compressor_info
  * @force_timing_sync: set via debugfs. When set, indicates that all connected
  *		       displays will be forced to synchronize.
+ * @dmcub_trace_event_en: enable dmcub trace events
  */
 struct amdgpu_display_manager {
 
@@ -177,6 +248,30 @@ struct amdgpu_display_manager {
 	 * NULL on hardware that does not support it.
 	 */
 	struct dmub_srv *dmub_srv;
+
+	/**
+	 * @dmub_notify:
+	 *
+	 * Notification from DMUB.
+	 */
+
+	struct dmub_notification *dmub_notify;
+
+	/**
+	 * @dmub_callback:
+	 *
+	 * Callback functions to handle notification from DMUB.
+	 */
+
+	dmub_notify_interrupt_callback_t dmub_callback[AMDGPU_DMUB_NOTIFICATION_MAX];
+
+	/**
+	 * @dmub_thread_offload:
+	 *
+	 * Flag to indicate if callback is offload.
+	 */
+
+	bool dmub_thread_offload[AMDGPU_DMUB_NOTIFICATION_MAX];
 
 	/**
 	 * @dmub_fb_info:
@@ -349,12 +444,18 @@ struct amdgpu_display_manager {
 	struct common_irq_params
 	dmub_trace_params[1];
 
+	struct common_irq_params
+	dmub_outbox_params[1];
+
 	spinlock_t irq_handler_list_table_lock;
 
-	struct backlight_device *backlight_dev;
+	struct backlight_device *backlight_dev[AMDGPU_DM_MAX_NUM_EDP];
 
-	const struct dc_link *backlight_link;
-	struct amdgpu_dm_backlight_caps backlight_caps;
+	const struct dc_link *backlight_link[AMDGPU_DM_MAX_NUM_EDP];
+
+	uint8_t num_of_edps;
+
+	struct amdgpu_dm_backlight_caps backlight_caps[AMDGPU_DM_MAX_NUM_EDP];
 
 	struct mod_freesync *freesync_module;
 #ifdef CONFIG_DRM_AMD_DC_HDCP
@@ -363,11 +464,11 @@ struct amdgpu_display_manager {
 
 #if defined(CONFIG_DRM_AMD_DC_DCN)
 	/**
-	 * @vblank_workqueue:
+	 * @vblank_control_workqueue:
 	 *
-	 * amdgpu workqueue during vblank
+	 * Deferred work for vblank control events.
 	 */
-	struct vblank_workqueue *vblank_workqueue;
+	struct workqueue_struct *vblank_control_workqueue;
 #endif
 
 	struct drm_atomic_state *cached_state;
@@ -402,7 +503,12 @@ struct amdgpu_display_manager {
 	 */
 	struct crc_rd_work *crc_rd_wrk;
 #endif
-
+	/**
+	 * @hpd_rx_offload_wq:
+	 *
+	 * Work queue to offload works of hpd_rx_irq
+	 */
+	struct hpd_rx_irq_offload_work_queue *hpd_rx_offload_wq;
 	/**
 	 * @mst_encoders:
 	 *
@@ -418,6 +524,15 @@ struct amdgpu_display_manager {
 	 * DAL fb memory allocation list, for communication with SMU.
 	 */
 	struct list_head da_list;
+	struct completion dmub_aux_transfer_done;
+	struct workqueue_struct *delayed_hpd_wq;
+
+	/**
+	 * @brightness:
+	 *
+	 * cached backlight values.
+	 */
+	u32 brightness[AMDGPU_DM_MAX_NUM_EDP];
 };
 
 enum dsc_clock_force_state {
@@ -431,6 +546,7 @@ struct dsc_preferred_settings {
 	uint32_t dsc_num_slices_v;
 	uint32_t dsc_num_slices_h;
 	uint32_t dsc_bits_per_pixel;
+	bool dsc_force_disable_passthrough;
 };
 
 struct amdgpu_dm_connector {
@@ -483,6 +599,8 @@ struct amdgpu_dm_connector {
 	struct dsc_preferred_settings dsc_settings;
 	/* Cached display modes */
 	struct drm_display_mode freesync_vid_base;
+
+	int psr_skip_count;
 };
 
 #define to_amdgpu_dm_connector(x) container_of(x, struct amdgpu_dm_connector, base)
@@ -511,6 +629,8 @@ struct dm_crtc_state {
 
 	bool dsc_force_changed;
 	bool vrr_supported;
+
+	bool force_dpms_off;
 	struct mod_freesync_config freesync_config;
 	struct dc_info_packet vrr_infopacket;
 
@@ -591,6 +711,7 @@ void amdgpu_dm_trigger_timing_sync(struct drm_device *dev);
 #define MAX_COLOR_LEGACY_LUT_ENTRIES 256
 
 void amdgpu_dm_init_color_mod(void);
+int amdgpu_dm_verify_lut_sizes(const struct drm_crtc_state *crtc_state);
 int amdgpu_dm_update_crtc_color_mgmt(struct dm_crtc_state *crtc);
 int amdgpu_dm_update_plane_color_mgmt(struct dm_crtc_state *crtc,
 				      struct dc_plane_state *dc_plane_state);
@@ -600,4 +721,6 @@ void amdgpu_dm_update_connector_after_detect(
 
 extern const struct drm_encoder_helper_funcs amdgpu_dm_encoder_helper_funcs;
 
+int amdgpu_dm_process_dmub_aux_transfer_sync(struct dc_context *ctx, unsigned int linkIndex,
+					struct aux_payload *payload, enum aux_return_code_type *operation_result);
 #endif /* __AMDGPU_DM_H__ */

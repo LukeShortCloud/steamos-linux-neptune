@@ -29,6 +29,8 @@
 #include "dcn20_stream_encoder.h"
 #include "reg_helper.h"
 #include "hw_shared.h"
+#include "inc/link_dpcd.h"
+#include "dpcd_defs.h"
 
 #define DC_LOGGER \
 		enc1->base.ctx->logger
@@ -290,7 +292,8 @@ static void enc2_dp_set_dsc_config(struct stream_encoder *enc,
 
 static void enc2_dp_set_dsc_pps_info_packet(struct stream_encoder *enc,
 					bool enable,
-					uint8_t *dsc_packed_pps)
+					uint8_t *dsc_packed_pps,
+					bool immediate_update)
 {
 	struct dcn10_stream_encoder *enc1 = DCN10STRENC_FROM_STRENC(enc);
 
@@ -444,6 +447,7 @@ static bool is_two_pixels_per_containter(const struct dc_crtc_timing *timing)
 }
 
 void enc2_stream_encoder_dp_unblank(
+		struct dc_link *link,
 		struct stream_encoder *enc,
 		const struct encoder_unblank_param *param)
 {
@@ -522,6 +526,8 @@ void enc2_stream_encoder_dp_unblank(
 	 */
 
 	REG_UPDATE(DP_VID_STREAM_CNTL, DP_VID_STREAM_ENABLE, true);
+
+	dp_source_sequence_trace(link, DPCD_SOURCE_SEQ_AFTER_ENABLE_DP_VID_STREAM);
 }
 
 static void enc2_dp_set_odm_combine(
@@ -550,6 +556,17 @@ void enc2_stream_encoder_dp_set_stream_attribute(
 
 	REG_UPDATE(DP_SEC_FRAMING4,
 		DP_SST_SDP_SPLITTING, enable_sdp_splitting);
+}
+
+uint32_t enc2_get_fifo_cal_average_level(
+		struct stream_encoder *enc)
+{
+	struct dcn10_stream_encoder *enc1 = DCN10STRENC_FROM_STRENC(enc);
+	uint32_t fifo_level;
+
+	REG_GET(DIG_FIFO_STATUS,
+			DIG_FIFO_CAL_AVERAGE_LEVEL, &fifo_level);
+	return fifo_level;
 }
 
 static const struct stream_encoder_funcs dcn20_str_enc_funcs = {
@@ -598,6 +615,7 @@ static const struct stream_encoder_funcs dcn20_str_enc_funcs = {
 	.dp_set_dsc_pps_info_packet = enc2_dp_set_dsc_pps_info_packet,
 	.set_dynamic_metadata = enc2_set_dynamic_metadata,
 	.hdmi_reset_stream_attribute = enc1_reset_hdmi_stream_attribute,
+	.get_fifo_cal_average_level = enc2_get_fifo_cal_average_level,
 };
 
 void dcn20_stream_encoder_construct(

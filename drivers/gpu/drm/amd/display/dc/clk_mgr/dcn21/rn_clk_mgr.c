@@ -42,6 +42,7 @@
 #include "clk/clk_10_0_2_sh_mask.h"
 #include "renoir_ip_offset.h"
 
+#include "irq/dcn21/irq_service_dcn21.h"
 
 /* Constants */
 
@@ -106,10 +107,10 @@ static void rn_update_clocks_update_dpp_dto(struct clk_mgr_internal *clk_mgr,
 	for (i = 0; i < clk_mgr->base.ctx->dc->res_pool->pipe_count; i++) {
 		int dpp_inst, dppclk_khz, prev_dppclk_khz;
 
-		/* Loop index will match dpp->inst if resource exists,
-		 * and we want to avoid dependency on dpp object
+		/* Loop index may not match dpp->inst if some pipes disabled,
+		 * so select correct inst from res_pool
 		 */
-		dpp_inst = i;
+		dpp_inst = clk_mgr->base.ctx->dc->res_pool->dpps[i]->inst;
 		dppclk_khz = context->res_ctx.pipe_ctx[i].plane_res.bw.dppclk_khz;
 
 		prev_dppclk_khz = clk_mgr->dccg->pipe_dppclk_khz[i];
@@ -128,10 +129,12 @@ void rn_update_clocks(struct clk_mgr *clk_mgr_base,
 	struct clk_mgr_internal *clk_mgr = TO_CLK_MGR_INTERNAL(clk_mgr_base);
 	struct dc_clocks *new_clocks = &context->bw_ctx.bw.dcn.clk;
 	struct dc *dc = clk_mgr_base->ctx->dc;
-	int display_count, i;
+	int display_count;
+	int irq_src;
 	bool update_dppclk = false;
 	bool update_dispclk = false;
 	bool dpp_clock_lowered = false;
+	uint32_t hpd_state;
 
 	struct dmcu *dmcu = clk_mgr_base->ctx->dc->res_pool->dmcu;
 
@@ -147,8 +150,15 @@ void rn_update_clocks(struct clk_mgr *clk_mgr_base,
 		if (clk_mgr_base->clks.pwr_state != DCN_PWR_STATE_LOW_POWER) {
 
 			display_count = rn_get_active_display_cnt_wa(dc, context);
+
+			for (irq_src = DC_IRQ_SOURCE_HPD1; irq_src <= DC_IRQ_SOURCE_HPD5; irq_src++) {
+				hpd_state = dal_get_hpd_state_dcn21(dc->res_pool->irqs, irq_src);
+				if (hpd_state)
+					break;
+			}
+
 			/* if we can go lower, go lower */
-			if (display_count == 0) {
+			if (display_count == 0 && !hpd_state) {
 				rn_vbios_smu_set_dcn_low_power_state(clk_mgr, DCN_PWR_STATE_LOW_POWER);
 				/* update power state */
 				clk_mgr_base->clks.pwr_state = DCN_PWR_STATE_LOW_POWER;
@@ -209,14 +219,6 @@ void rn_update_clocks(struct clk_mgr *clk_mgr_base,
 				context,
 				clk_mgr_base->clks.dppclk_khz,
 				safe_to_lower);
-
-		for (i = 0; i < context->stream_count; i++) {
-			if (context->streams[i]->signal == SIGNAL_TYPE_EDP &&
-				context->streams[i]->apply_seamless_boot_optimization) {
-				dc_wait_for_vblank(dc, context->streams[i]);
-				break;
-			}
-		}
 
 		clk_mgr_base->clks.actual_dppclk_khz =
 				rn_vbios_smu_set_dppclk(clk_mgr, clk_mgr_base->clks.dppclk_khz);
@@ -842,6 +844,7 @@ static struct wm_table lpddr4_wm_table_rn = {
 		},
 	}
 };
+
 static unsigned int find_socclk_for_voltage(struct dpm_clocks *clock_table, unsigned int voltage)
 {
 	int i;
@@ -854,6 +857,7 @@ static unsigned int find_socclk_for_voltage(struct dpm_clocks *clock_table, unsi
 	ASSERT(0);
 	return 0;
 }
+
 static unsigned int find_dcfclk_for_voltage(struct dpm_clocks *clock_table, unsigned int voltage)
 {
 	int i;
