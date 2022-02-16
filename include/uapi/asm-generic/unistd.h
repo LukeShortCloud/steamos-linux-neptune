@@ -872,8 +872,11 @@ __SYSCALL(__NR_landlock_add_rule, sys_landlock_add_rule)
 #define __NR_landlock_restrict_self 446
 __SYSCALL(__NR_landlock_restrict_self, sys_landlock_restrict_self)
 
+#define __NR_futex_waitv 449
+__SYSCALL(__NR_futex_waitv, sys_futex_waitv)
+
 #undef __NR_syscalls
-#define __NR_syscalls 447
+#define __NR_syscalls 450
 
 /*
  * 32 bit systems traditionally used different
