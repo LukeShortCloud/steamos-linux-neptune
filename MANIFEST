@@ -1,0 +1,40 @@
+TTM_PL_FLAG_TEMPORARY:
+    6d0650fe2686667b68e1670f29a928e935df568f ("drm/amdgpu: Fix BUG_ON assert")
+als:
+    2aba90bba5c4c9ccbec5057d111c3e52a654e9a9 ("ltrf216a: Add entry for depmod alias")
+amd-extra:
+    e510d81e7140534498cf9155a2b4d31c97beee3b ("amdgpu: dm: Create property prior to drm registration")
+amd-staging-drm-next:
+    293647b4dc4fafec627b9676ca06f65d462662f4 ("drm/amdgpu: Wrong order for config and counter_id parameters")
+backlight-precision:
+    b42a7b10e336585731486870db51ecb9cd57c8d0 ("amd/drm : override backlight min value from 12 -> 0")
+battery-quirk:
+    3f6deb05688d710e9fd9c5099861bb1a7740232c ("ACPI: battery: Accept charges over the design capacity as full")
+btrfs:
+    6af5420d40c74edc381f5fa1525177af94be748b ("btrfs: do not do preemptive flushing if the majority is global rsv")
+futex-waitv:
+    a74175a3a14f2488840435ab63def6279753b4c0 ("futex: Add entry point for FUTEX_WAIT_MULTIPLE (opcode 31)")
+gfxoff:
+    da5799feaf864c733872f7d309133f3aa0d8840a ("drm/amdgpu/vcn: drop gfxoff control for VCN2+")
+hidraw-rwsem:
+    657cca30ca0855169d8b249199ae02d31bd607ad ("HID: hidraw: Replace hidraw device table mutex with a rwsem")
+mm-soft-dirty-file:
+    dade16308d7c66b639d77b0c3b93f711341d9f79 ("mm: Support soft dirty flag read with reset.")
+platform:
+    d4cf0e5edc08e051cbf5cf091feab7703705402d ("platform: jupiter: Add support for PD voltage/current readings")
+rtw88:
+    bf1ae0f2bc08a6d64e5b6cf026c8f1d8fad57191 ("rtw88: move adaptivity mechanism to firmware")
+sclk-profiling-mode:
+    72a4f00cc35a8c195767eafc3a6783b00e91f303 ("drm/amdgpu/pm: properly handle sclk for profiling modes on vangogh")
+setup-gitlabci:
+    40e5486b4f92756df462e92afbc2c1bbc5439946 ("gitlab-ci: Enable CONFIG_JUPITER in ci build")
+simon:
+    0750fac50cb4069d695d30b7c050f8380c633a7c ("drm/panel-orientation-quirks: add Valve Steam Deck")
+sound:
+    9f8defd99b349f7fccd167d082418a3b6c32705f ("ASoC: amd: vangogh: refactor i2s master mode sequence code")
+spi-config-timeout-quirk:
+    33ddc83245e13398673e0d3e8457a9e96850e341 ("pinctrl-amd: Add quirk to timeout irq pin reconfiguration")
+touchscreen-probe:
+    7a68ff043c92778816dd0165dd616548719d1f67 ("gpio: Initialize gc->irq.domain before setting gc->to_irq")
+usb:
+    e2067974dfa3e702679af9433b436014096c26c5 ("usb: dwc3: Bump USB gadget wakeup timeout")
