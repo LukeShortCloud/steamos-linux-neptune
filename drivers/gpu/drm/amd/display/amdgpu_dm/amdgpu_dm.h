@@ -49,6 +49,13 @@
 #define AMDGPU_DM_MAX_NUM_EDP 2
 
 #define AMDGPU_DMUB_NOTIFICATION_MAX 5
+
+/*
+ * DMUB Async to Sync Mechanism Status
+ */
+#define DMUB_ASYNC_TO_SYNC_ACCESS_FAIL 1
+#define DMUB_ASYNC_TO_SYNC_ACCESS_TIMEOUT 2
+#define DMUB_ASYNC_TO_SYNC_ACCESS_SUCCESS 3
 /*
 #include "include/amdgpu_dal_power_if.h"
 #include "amdgpu_dm_irq.h"
@@ -533,6 +540,7 @@ struct amdgpu_display_manager {
 	 * cached backlight values.
 	 */
 	u32 brightness[AMDGPU_DM_MAX_NUM_EDP];
+	bool brightness_set[AMDGPU_DM_MAX_NUM_EDP];
 };
 
 enum dsc_clock_force_state {
@@ -597,6 +605,7 @@ struct amdgpu_dm_connector {
 #endif
 	bool force_yuv420_output;
 	struct dsc_preferred_settings dsc_settings;
+	union dp_downstream_port_present mst_downstream_port_present;
 	/* Cached display modes */
 	struct drm_display_mode freesync_vid_base;
 
@@ -618,6 +627,8 @@ struct dm_crtc_state {
 
 	bool cm_has_degamma;
 	bool cm_is_degamma_srgb;
+
+	bool mpo_requested;
 
 	int update_type;
 	int active_planes;
@@ -721,6 +732,10 @@ void amdgpu_dm_update_connector_after_detect(
 
 extern const struct drm_encoder_helper_funcs amdgpu_dm_encoder_helper_funcs;
 
-int amdgpu_dm_process_dmub_aux_transfer_sync(struct dc_context *ctx, unsigned int linkIndex,
-					struct aux_payload *payload, enum aux_return_code_type *operation_result);
+int amdgpu_dm_process_dmub_aux_transfer_sync(bool is_cmd_aux,
+					struct dc_context *ctx, unsigned int link_index,
+					void *payload, void *operation_result);
+
+bool check_seamless_boot_capability(struct amdgpu_device *adev);
+
 #endif /* __AMDGPU_DM_H__ */

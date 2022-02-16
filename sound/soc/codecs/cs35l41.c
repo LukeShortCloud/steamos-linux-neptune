@@ -219,27 +219,25 @@ static int cs35l41_dsp_power_ev(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
-		if (cs35l41->halo_booted == false)
-			wm_adsp_early_event(w, kcontrol, event);
-		else
-			cs35l41->dsp.booted = true;
+		dev_dbg(cs35l41->dev, "dsp_power_ev PMU\n");
+		wm_adsp_early_event(w, kcontrol, event);
+		wm_adsp_event(w, kcontrol, SND_SOC_DAPM_POST_PMU);
 
 		break;
 	case SND_SOC_DAPM_PRE_PMD:
-		if (cs35l41->halo_booted == false) {
-			cancel_delayed_work(&cs35l41->hb_work);
-			mutex_lock(&cs35l41->hb_lock);
-			cs35l41_exit_hibernate(cs35l41);
-			mutex_unlock(&cs35l41->hb_lock);
+		dev_dbg(cs35l41->dev, "dsp_power_ev attempting DSP unload\n");
+		cancel_delayed_work(&cs35l41->hb_work);
+		mutex_lock(&cs35l41->hb_lock);
+		cs35l41_exit_hibernate(cs35l41);
+		mutex_unlock(&cs35l41->hb_lock);
 
-			if (cs35l41->amp_hibernate !=
-						CS35L41_HIBERNATE_INCOMPATIBLE)
-				cs35l41->amp_hibernate =
+		if (cs35l41->amp_hibernate !=
+					CS35L41_HIBERNATE_INCOMPATIBLE)
+			cs35l41->amp_hibernate =
 						CS35L41_HIBERNATE_NOT_LOADED;
 
-			wm_adsp_early_event(w, kcontrol, event);
-			wm_adsp_event(w, kcontrol, event);
-		}
+		wm_adsp_event(w, kcontrol, event);
+		wm_adsp_early_event(w, kcontrol, event);
 
 		break;
 	default:
@@ -263,10 +261,6 @@ static int cs35l41_dsp_load_ev(struct snd_soc_dapm_widget *w,
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		if (cs35l41->halo_booted == false) {
-			wm_adsp_event(w, kcontrol, event);
-			cs35l41->halo_booted = true;
-		}
 
 		if (cs35l41->dsp.running) {
 			regmap_read(cs35l41->regmap, CS35L41_DSP_MBOX_2,

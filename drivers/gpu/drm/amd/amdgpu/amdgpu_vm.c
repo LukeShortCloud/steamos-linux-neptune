@@ -53,7 +53,7 @@
  * can be mapped as snooped (cached system pages) or unsnooped
  * (uncached system pages).
  * Each VM has an ID associated with it and there is a page table
- * associated with each VMID.  When execting a command buffer,
+ * associated with each VMID.  When executing a command buffer,
  * the kernel tells the the ring what VMID to use for that command
  * buffer.  VMIDs are allocated dynamically as commands are submitted.
  * The userspace drivers maintain their own address space and the kernel
@@ -845,7 +845,7 @@ static int amdgpu_vm_clear_bo(struct amdgpu_device *adev,
 			return r;
 	}
 
-	if (!drm_dev_enter(&adev->ddev, &idx))
+	if (!drm_dev_enter(adev_to_drm(adev), &idx))
 		return -ENODEV;
 
 	r = vm->update_funcs->map_table(vmbo);
@@ -1395,7 +1395,7 @@ int amdgpu_vm_update_pdes(struct amdgpu_device *adev,
 	if (list_empty(&vm->relocated))
 		return 0;
 
-	if (!drm_dev_enter(&adev->ddev, &idx))
+	if (!drm_dev_enter(adev_to_drm(adev), &idx))
 		return -ENODEV;
 
 	memset(&params, 0, sizeof(params));
@@ -1718,7 +1718,7 @@ int amdgpu_vm_bo_update_mapping(struct amdgpu_device *adev,
 	enum amdgpu_sync_mode sync_mode;
 	int r, idx;
 
-	if (!drm_dev_enter(&adev->ddev, &idx))
+	if (!drm_dev_enter(adev_to_drm(adev), &idx))
 		return -ENODEV;
 
 	memset(&params, 0, sizeof(params));

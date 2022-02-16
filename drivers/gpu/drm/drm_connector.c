@@ -2240,6 +2240,44 @@ void drm_connector_set_vrr_capable_property(
 EXPORT_SYMBOL(drm_connector_set_vrr_capable_property);
 
 /**
+ * drm_connector_init_panel_orientation_property -
+ *     create the connector's panel orientation property
+ *
+ * This function attaches a "panel orientation" property to the connector
+ * and initializes its value to DRM_MODE_PANEL_ORIENTATION_UNKNOWN.
+ *
+ * The value of the property can be set by drm_connector_set_panel_orientation()
+ * or drm_connector_set_panel_orientation_with_quirk() later.
+ *
+ * Returns:
+ * Zero on success, negative errno on failure.
+ */
+int drm_connector_init_panel_orientation_property(
+       struct drm_connector *connector)
+{
+       struct drm_device *dev = connector->dev;
+       struct drm_property *prop;
+
+       if(dev->mode_config.panel_orientation_property)
+               return 0;
+
+       prop = drm_property_create_enum(dev, DRM_MODE_PROP_IMMUTABLE,
+                       "panel orientation",
+                       drm_panel_orientation_enum_list,
+                       ARRAY_SIZE(drm_panel_orientation_enum_list));
+       if (!prop)
+               return -ENOMEM;
+
+       dev->mode_config.panel_orientation_property = prop;
+       drm_object_attach_property(&connector->base, prop,
+                                  DRM_MODE_PANEL_ORIENTATION_UNKNOWN);
+
+       return 0;
+}
+EXPORT_SYMBOL(drm_connector_init_panel_orientation_property);
+
+
+/**
  * drm_connector_set_panel_orientation - sets the connector's panel_orientation
  * @connector: connector for which to set the panel-orientation property.
  * @panel_orientation: drm_panel_orientation value to set
@@ -2263,7 +2301,6 @@ int drm_connector_set_panel_orientation(
 {
 	struct drm_device *dev = connector->dev;
 	struct drm_display_info *info = &connector->display_info;
-	struct drm_property *prop;
 
 	/* Already set? */
 	if (info->panel_orientation != DRM_MODE_PANEL_ORIENTATION_UNKNOWN)
@@ -2275,20 +2312,14 @@ int drm_connector_set_panel_orientation(
 
 	info->panel_orientation = panel_orientation;
 
-	prop = dev->mode_config.panel_orientation_property;
-	if (!prop) {
-		prop = drm_property_create_enum(dev, DRM_MODE_PROP_IMMUTABLE,
-				"panel orientation",
-				drm_panel_orientation_enum_list,
-				ARRAY_SIZE(drm_panel_orientation_enum_list));
-		if (!prop)
-			return -ENOMEM;
+	if (!dev->mode_config.panel_orientation_property &&
+	    drm_connector_init_panel_orientation_property(connector) < 0)
+		return -ENOMEM;
 
-		dev->mode_config.panel_orientation_property = prop;
-	}
+	drm_object_property_set_value(&connector->base,
+			      dev->mode_config.panel_orientation_property,
+			      info->panel_orientation);
 
-	drm_object_attach_property(&connector->base, prop,
-				   info->panel_orientation);
 	return 0;
 }
 EXPORT_SYMBOL(drm_connector_set_panel_orientation);

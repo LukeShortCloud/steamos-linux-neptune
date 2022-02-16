@@ -1085,19 +1085,6 @@ static unsigned int radeon_vga_set_decode(void *cookie, bool state)
 }
 
 /**
- * radeon_check_pot_argument - check that argument is a power of two
- *
- * @arg: value to check
- *
- * Validates that a certain argument is a power of two (all asics).
- * Returns true if argument is valid.
- */
-static bool radeon_check_pot_argument(int arg)
-{
-	return (arg & (arg - 1)) == 0;
-}
-
-/**
  * radeon_gart_size_auto - Determine a sensible default GART size
  *                         according to ASIC family.
  *
@@ -1125,7 +1112,7 @@ static int radeon_gart_size_auto(enum radeon_family family)
 static void radeon_check_arguments(struct radeon_device *rdev)
 {
 	/* vramlimit must be a power of two */
-	if (!radeon_check_pot_argument(radeon_vram_limit)) {
+	if (!is_power_of_2(radeon_vram_limit)) {
 		dev_warn(rdev->dev, "vram limit (%d) must be a power of 2\n",
 				radeon_vram_limit);
 		radeon_vram_limit = 0;
@@ -1139,7 +1126,7 @@ static void radeon_check_arguments(struct radeon_device *rdev)
 		dev_warn(rdev->dev, "gart size (%d) too small\n",
 				radeon_gart_size);
 		radeon_gart_size = radeon_gart_size_auto(rdev->family);
-	} else if (!radeon_check_pot_argument(radeon_gart_size)) {
+	} else if (!is_power_of_2(radeon_gart_size)) {
 		dev_warn(rdev->dev, "gart size (%d) must be a power of 2\n",
 				radeon_gart_size);
 		radeon_gart_size = radeon_gart_size_auto(rdev->family);
@@ -1162,7 +1149,7 @@ static void radeon_check_arguments(struct radeon_device *rdev)
 		break;
 	}
 
-	if (!radeon_check_pot_argument(radeon_vm_size)) {
+	if (!is_power_of_2(radeon_vm_size)) {
 		dev_warn(rdev->dev, "VM size (%d) must be a power of 2\n",
 			 radeon_vm_size);
 		radeon_vm_size = 4;

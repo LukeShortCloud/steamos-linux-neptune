@@ -647,6 +647,12 @@ void enc1_stream_encoder_set_throttled_vcp_size(
 				x),
 			26));
 
+	// If y rounds up to integer, carry it over to x.
+	if (y >> 26) {
+		x += 1;
+		y = 0;
+	}
+
 	REG_SET_2(DP_MSE_RATE_CNTL, 0,
 		DP_MSE_RATE_X, x,
 		DP_MSE_RATE_Y, y);
@@ -894,6 +900,19 @@ void enc1_stream_encoder_stop_dp_info_packets(
 	if (value)
 		REG_UPDATE(DP_SEC_CNTL, DP_SEC_STREAM_ENABLE, 1);
 
+}
+
+void enc1_stream_encoder_reset_fifo(
+	struct stream_encoder *enc)
+{
+	struct dcn10_stream_encoder *enc1 = DCN10STRENC_FROM_STRENC(enc);
+
+	/* set DIG_START to 0x1 to reset FIFO */
+	REG_UPDATE(DIG_FE_CNTL, DIG_START, 1);
+	udelay(100);
+
+	/* write 0 to take the FIFO out of reset */
+	REG_UPDATE(DIG_FE_CNTL, DIG_START, 0);
 }
 
 void enc1_stream_encoder_dp_blank(
@@ -1402,11 +1421,6 @@ static void enc1_se_disable_dp_audio(
 	struct dcn10_stream_encoder *enc1 = DCN10STRENC_FROM_STRENC(enc);
 	uint32_t value = 0;
 
-#if defined(CONFIG_DRM_AMD_DC_DCN)
-	if (enc->afmt && enc->afmt->funcs->afmt_powerdown)
-		enc->afmt->funcs->afmt_powerdown(enc->afmt);
-#endif
-
 	/* Disable Audio packets */
 	REG_UPDATE_5(DP_SEC_CNTL,
 			DP_SEC_ASP_ENABLE, 0,
@@ -1586,6 +1600,8 @@ static const struct stream_encoder_funcs dcn10_str_enc_funcs = {
 		enc1_stream_encoder_send_immediate_sdp_message,
 	.stop_dp_info_packets =
 		enc1_stream_encoder_stop_dp_info_packets,
+	.reset_fifo =
+		enc1_stream_encoder_reset_fifo,
 	.dp_blank =
 		enc1_stream_encoder_dp_blank,
 	.dp_unblank =

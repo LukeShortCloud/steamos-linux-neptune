@@ -54,18 +54,19 @@ enum {
 	PEAK_FACTOR_X1000 = 1006,
 };
 
+struct dc_link_settings dp_get_max_link_cap(struct dc_link *link);
+
 bool dp_verify_link_cap(
 	struct dc_link *link,
+	const struct link_resource *link_res,
 	struct dc_link_settings *known_limit_link_setting,
 	int *fail_count);
 
 bool dp_verify_link_cap_with_retries(
 	struct dc_link *link,
+	const struct link_resource *link_res,
 	struct dc_link_settings *known_limit_link_setting,
 	int attempts);
-
-bool dp_verify_mst_link_cap(
-	struct dc_link *link);
 
 bool dp_validate_mode_timing(
 	struct dc_link *link,
@@ -111,6 +112,9 @@ void dp_set_panel_mode(struct dc_link *link, enum dp_panel_mode panel_mode);
 bool dp_overwrite_extended_receiver_cap(struct dc_link *link);
 
 void dpcd_set_source_specific_data(struct dc_link *link);
+
+void dpcd_update_cable_id(struct dc_link *link);
+
 /* Write DPCD link configuration data. */
 enum dc_status dpcd_set_link_settings(
 	struct dc_link *link,
@@ -121,12 +125,12 @@ enum dc_status dpcd_set_lane_settings(
 	const struct link_training_settings *link_training_setting,
 	uint32_t offset);
 /* Read training status and adjustment requests from DPCD. */
-enum dc_status dp_get_lane_status_and_drive_settings(
+enum dc_status dp_get_lane_status_and_lane_adjust(
 	struct dc_link *link,
 	const struct link_training_settings *link_training_setting,
-	union lane_status *ln_status,
-	union lane_align_status_updated *ln_status_updated,
-	struct link_training_settings *req_settings,
+	union lane_status ln_status[LANE_COUNT_DP_MAX],
+	union lane_align_status_updated *ln_align,
+	union lane_adjust ln_adjust[LANE_COUNT_DP_MAX],
 	uint32_t offset);
 
 void dp_wait_for_training_aux_rd_interval(
@@ -147,10 +151,15 @@ bool dp_is_interlane_aligned(union lane_align_status_updated align_status);
 
 bool dp_is_max_vs_reached(
 	const struct link_training_settings *lt_settings);
-
-void dp_update_drive_settings(
-	struct link_training_settings *dest,
-	struct link_training_settings src);
+void dp_hw_to_dpcd_lane_settings(
+	const struct link_training_settings *lt_settings,
+	const struct dc_lane_settings hw_lane_settings[LANE_COUNT_DP_MAX],
+	union dpcd_training_lane dpcd_lane_settings[LANE_COUNT_DP_MAX]);
+void dp_decide_lane_settings(
+	const struct link_training_settings *lt_settings,
+	const union lane_adjust ln_adjust[LANE_COUNT_DP_MAX],
+	struct dc_lane_settings hw_lane_settings[LANE_COUNT_DP_MAX],
+	union dpcd_training_lane dpcd_lane_settings[LANE_COUNT_DP_MAX]);
 
 uint32_t dp_translate_training_aux_read_interval(uint32_t dpcd_aux_read_interval);
 
@@ -163,7 +172,7 @@ uint8_t dc_dp_initialize_scrambling_data_symbols(
 	struct dc_link *link,
 	enum dc_dp_training_pattern pattern);
 
-enum dc_status dp_set_fec_ready(struct dc_link *link, bool ready);
+enum dc_status dp_set_fec_ready(struct dc_link *link, const struct link_resource *link_res, bool ready);
 void dp_set_fec_enable(struct dc_link *link, bool enable);
 bool dp_set_dsc_enable(struct pipe_ctx *pipe_ctx, bool enable);
 bool dp_set_dsc_pps_sdp(struct pipe_ctx *pipe_ctx, bool enable, bool immediate_update);
@@ -205,11 +214,15 @@ bool dpcd_poll_for_allocation_change_trigger(struct dc_link *link);
 struct fixed31_32 calculate_sst_avg_time_slots_per_mtp(
 		const struct dc_stream_state *stream,
 		const struct dc_link *link);
-void enable_dp_hpo_output(struct dc_link *link, const struct dc_link_settings *link_settings);
-void disable_dp_hpo_output(struct dc_link *link, enum signal_type signal);
+void enable_dp_hpo_output(struct dc_link *link,
+		const struct link_resource *link_res,
+		const struct dc_link_settings *link_settings);
+void disable_dp_hpo_output(struct dc_link *link,
+		const struct link_resource *link_res,
+		enum signal_type signal);
 void setup_dp_hpo_stream(struct pipe_ctx *pipe_ctx, bool enable);
 bool is_dp_128b_132b_signal(struct pipe_ctx *pipe_ctx);
-void reset_dp_hpo_stream_encoders_for_link(struct dc_link *link);
 
 bool dp_retrieve_lttpr_cap(struct dc_link *link);
+void edp_panel_backlight_power_on(struct dc_link *link);
 #endif /* __DC_LINK_DP_H__ */

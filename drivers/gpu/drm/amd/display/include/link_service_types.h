@@ -74,12 +74,10 @@ enum link_training_result {
 	LINK_TRAINING_LINK_LOSS,
 	/* Abort link training (because sink unplugged) */
 	LINK_TRAINING_ABORT,
-#if defined(CONFIG_DRM_AMD_DC_DCN)
 	DP_128b_132b_LT_FAILED,
 	DP_128b_132b_MAX_LOOP_COUNT_REACHED,
 	DP_128b_132b_CHANNEL_EQ_DONE_TIMEOUT,
 	DP_128b_132b_CDS_DONE_TIMEOUT,
-#endif
 };
 
 enum lttpr_mode {
@@ -90,33 +88,54 @@ enum lttpr_mode {
 
 struct link_training_settings {
 	struct dc_link_settings link_settings;
-	struct dc_lane_settings lane_settings[LANE_COUNT_DP_MAX];
 
+	/* TODO: turn lane settings below into mandatory fields
+	 * as initial lane configuration
+	 */
+	struct dc_lane_settings lane_settings[LANE_COUNT_DP_MAX];
 	enum dc_voltage_swing *voltage_swing;
 	enum dc_pre_emphasis *pre_emphasis;
 	enum dc_post_cursor2 *post_cursor2;
 	bool should_set_fec_ready;
-#if defined(CONFIG_DRM_AMD_DC_DCN)
 	/* TODO - factor lane_settings out because it changes during LT */
 	union dc_dp_ffe_preset *ffe_preset;
-#endif
 
 	uint16_t cr_pattern_time;
 	uint16_t eq_pattern_time;
 	uint16_t cds_pattern_time;
 	enum dc_dp_training_pattern pattern_for_cr;
 	enum dc_dp_training_pattern pattern_for_eq;
-#if defined(CONFIG_DRM_AMD_DC_DCN)
 	enum dc_dp_training_pattern pattern_for_cds;
 
 	uint32_t eq_wait_time_limit;
 	uint8_t eq_loop_count_limit;
 	uint32_t cds_wait_time_limit;
-#endif
 
 	bool enhanced_framing;
-	bool allow_invalid_msa_timing_param;
 	enum lttpr_mode lttpr_mode;
+
+	/* disallow different lanes to have different lane settings */
+	bool disallow_per_lane_settings;
+	/* dpcd lane settings will always use the same hw lane settings
+	 * even if it doesn't match requested lane adjust */
+	bool always_match_dpcd_with_hw_lane_settings;
+
+	/*****************************************************************
+	* training states - parameters that can change in link training
+	*****************************************************************/
+	/* TODO: Move hw_lane_settings and dpcd_lane_settings
+	 * along with lane adjust, lane align, offset and all
+	 * other training states into a new structure called
+	 * training states, so link_training_settings becomes
+	 * a constant input pre-decided prior to link training.
+	 *
+	 * The goal is to strictly decouple link training settings
+	 * decision making process from link training states to
+	 * prevent it from messy code practice of changing training
+	 * decision on the fly.
+	 */
+	struct dc_lane_settings hw_lane_settings[LANE_COUNT_DP_MAX];
+	union dpcd_training_lane dpcd_lane_settings[LANE_COUNT_DP_MAX];
 };
 
 /*TODO: Move this enum test harness*/
@@ -136,7 +155,6 @@ enum dp_test_pattern {
 	DP_TEST_PATTERN_CP2520_2,
 	DP_TEST_PATTERN_HBR2_COMPLIANCE_EYE = DP_TEST_PATTERN_CP2520_2,
 	DP_TEST_PATTERN_CP2520_3,
-#if defined(CONFIG_DRM_AMD_DC_DCN)
 	DP_TEST_PATTERN_128b_132b_TPS1,
 	DP_TEST_PATTERN_128b_132b_TPS2,
 	DP_TEST_PATTERN_PRBS9,
@@ -146,20 +164,15 @@ enum dp_test_pattern {
 	DP_TEST_PATTERN_PRBS31,
 	DP_TEST_PATTERN_264BIT_CUSTOM,
 	DP_TEST_PATTERN_SQUARE_PULSE,
-#endif
 
 	/* Link Training Patterns */
 	DP_TEST_PATTERN_TRAINING_PATTERN1,
 	DP_TEST_PATTERN_TRAINING_PATTERN2,
 	DP_TEST_PATTERN_TRAINING_PATTERN3,
 	DP_TEST_PATTERN_TRAINING_PATTERN4,
-#if defined(CONFIG_DRM_AMD_DC_DCN)
 	DP_TEST_PATTERN_128b_132b_TPS1_TRAINING_MODE,
 	DP_TEST_PATTERN_128b_132b_TPS2_TRAINING_MODE,
 	DP_TEST_PATTERN_PHY_PATTERN_END = DP_TEST_PATTERN_128b_132b_TPS2_TRAINING_MODE,
-#else
-	DP_TEST_PATTERN_PHY_PATTERN_END = DP_TEST_PATTERN_TRAINING_PATTERN4,
-#endif
 
 	/* link test patterns*/
 	DP_TEST_PATTERN_COLOR_SQUARES,

@@ -40,7 +40,13 @@ static bool is_fru_eeprom_supported(struct amdgpu_device *adev)
 	 */
 	struct atom_context *atom_ctx = adev->mode_info.atom_context;
 
-	/* VBIOS is of the format ###-DXXXYY-##. For SKU identification,
+	/* The i2c access is blocked on VF
+	 * TODO: Need other way to get the info
+	 */
+	if (amdgpu_sriov_vf(adev))
+		return false;
+
+	/* VBIOS is of the format ###-DXXXYYYY-##. For SKU identification,
 	 * we can use just the "DXXX" portion. If there were more models, we
 	 * could convert the 3 characters to a hex integer and use a switch
 	 * for ease/speed/readability. For now, 2 string comparisons are
@@ -56,6 +62,15 @@ static bool is_fru_eeprom_supported(struct amdgpu_device *adev)
 			return true;
 		else
 			return false;
+	case CHIP_ALDEBARAN:
+		/* All Aldebaran SKUs have the FRU */
+		return true;
+	case CHIP_SIENNA_CICHLID:
+		if (strnstr(atom_ctx->vbios_version, "D603",
+			    sizeof(atom_ctx->vbios_version)))
+			return true;
+		else
+			return false;
 	default:
 		return false;
 	}
@@ -66,7 +81,7 @@ static int amdgpu_fru_read_eeprom(struct amdgpu_device *adev, uint32_t addrptr,
 {
 	int ret, size;
 
-	ret = amdgpu_eeprom_read(&adev->pm.smu_i2c, addrptr, buff, 1);
+	ret = amdgpu_eeprom_read(adev->pm.fru_eeprom_i2c_bus, addrptr, buff, 1);
 	if (ret < 1) {
 		DRM_WARN("FRU: Failed to get size field");
 		return ret;
@@ -77,7 +92,7 @@ static int amdgpu_fru_read_eeprom(struct amdgpu_device *adev, uint32_t addrptr,
 	 */
 	size = buff[0] - I2C_PRODUCT_INFO_OFFSET;
 
-	ret = amdgpu_eeprom_read(&adev->pm.smu_i2c, addrptr + 1, buff, size);
+	ret = amdgpu_eeprom_read(adev->pm.fru_eeprom_i2c_bus, addrptr + 1, buff, size);
 	if (ret < 1) {
 		DRM_WARN("FRU: Failed to get data field");
 		return ret;
@@ -88,15 +103,19 @@ static int amdgpu_fru_read_eeprom(struct amdgpu_device *adev, uint32_t addrptr,
 
 int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
 {
-	unsigned char buff[34];
+	unsigned char buff[AMDGPU_PRODUCT_NAME_LEN+2];
 	u32 addrptr;
 	int size, len;
+	int offset = 2;
 
 	if (!is_fru_eeprom_supported(adev))
 		return 0;
 
+	if (adev->asic_type == CHIP_ALDEBARAN)
+		offset = 0;
+
 	/* If algo exists, it means that the i2c_adapter's initialized */
-	if (!adev->pm.smu_i2c.algo) {
+	if (!adev->pm.fru_eeprom_i2c_bus || !adev->pm.fru_eeprom_i2c_bus->algo) {
 		DRM_WARN("Cannot access FRU, EEPROM accessor not initialized");
 		return -ENODEV;
 	}
@@ -131,15 +150,13 @@ int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
 	}
 
 	len = size;
-	/* Product name should only be 32 characters. Any more,
-	 * and something could be wrong. Cap it at 32 to be safe
-	 */
-	if (len >= sizeof(adev->product_name)) {
-		DRM_WARN("FRU Product Number is larger than 32 characters. This is likely a mistake");
-		len = sizeof(adev->product_name) - 1;
+	if (len >= AMDGPU_PRODUCT_NAME_LEN) {
+		DRM_WARN("FRU Product Name is larger than %d characters. This is likely a mistake",
+				AMDGPU_PRODUCT_NAME_LEN);
+		len = AMDGPU_PRODUCT_NAME_LEN - 1;
 	}
 	/* Start at 2 due to buff using fields 0 and 1 for the address */
-	memcpy(adev->product_name, &buff[2], len);
+	memcpy(adev->product_name, &buff[offset], len);
 	adev->product_name[len] = '\0';
 
 	addrptr += size + 1;
@@ -157,7 +174,7 @@ int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
 		DRM_WARN("FRU Product Number is larger than 16 characters. This is likely a mistake");
 		len = sizeof(adev->product_number) - 1;
 	}
-	memcpy(adev->product_number, &buff[2], len);
+	memcpy(adev->product_number, &buff[offset], len);
 	adev->product_number[len] = '\0';
 
 	addrptr += size + 1;
@@ -184,7 +201,7 @@ int amdgpu_fru_get_product_info(struct amdgpu_device *adev)
 		DRM_WARN("FRU Serial Number is larger than 16 characters. This is likely a mistake");
 		len = sizeof(adev->serial) - 1;
 	}
-	memcpy(adev->serial, &buff[2], len);
+	memcpy(adev->serial, &buff[offset], len);
 	adev->serial[len] = '\0';
 
 	return 0;
