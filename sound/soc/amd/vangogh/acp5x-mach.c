@@ -274,6 +274,15 @@ static int platform_clock_control(struct snd_soc_dapm_widget *w,
 			dev_err(card->dev, "set sysclk err = %d\n", ret);
 			return -EIO;
 		}
+	}else {
+		ret = snd_soc_dai_set_sysclk(codec_dai, NAU8821_CLK_FLL_BLK, 0,
+			SND_SOC_CLOCK_IN);
+		if (ret < 0)
+			dev_err(codec_dai->dev, "can't set FS clock %d\n", ret);
+		ret = snd_soc_dai_set_pll(codec_dai, 0, 0, 48000, (48000 * 256));
+		if (ret < 0)
+			dev_err(codec_dai->dev, "can't set FLL: %d\n", ret);
+
 	}
 	return ret;
 }
@@ -289,7 +298,7 @@ static const struct snd_soc_dapm_widget acp5x_8821_widgets[] = {
 	SND_SOC_DAPM_MIC("Headset Mic", NULL),
 	SND_SOC_DAPM_MIC("Int Mic", NULL),
 	SND_SOC_DAPM_SUPPLY("Platform Clock", SND_SOC_NOPM, 0, 0,
-			    platform_clock_control, SND_SOC_DAPM_POST_PMD),
+			    platform_clock_control, SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 };
 
 static const struct snd_soc_dapm_route acp5x_8821_audio_route[] = {
